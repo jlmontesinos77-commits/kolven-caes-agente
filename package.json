@@ -1,0 +1,23 @@
+{
+  "name": "caes-agente-clasificador",
+  "version": "1.0.0",
+  "description": "Agente Durable de clasificacion masiva de documentacion PRL (CAES) - multi-tenant Kolven + SaaS",
+  "main": "dist/src/functions/*.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "prestart": "npm run build",
+    "start": "func start"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.0",
+    "@azure/storage-blob": "^12.24.0",
+    "durable-functions": "^3.4.0",
+    "jszip": "^3.10.1",
+    "unpdf": "^0.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
