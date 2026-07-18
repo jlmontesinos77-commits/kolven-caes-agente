@@ -11,8 +11,13 @@ import { tenantConfig } from "../shared/config";
 import { listarPorPrefijo, descargarBlob } from "../shared/blob";
 
 const EXTS_DOC = [".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif"];
-const esDoc = (n: string) => EXTS_DOC.some((e) => n.toLowerCase().endsWith(e));
-const esZip = (n: string) => n.toLowerCase().endsWith(".zip");
+// Ignora basura de macOS: AppleDouble (._archivo) y carpeta __MACOSX
+const esBasura = (path: string) => {
+  const base = path.split("/").pop() || path;
+  return base.startsWith("._") || path.includes("__MACOSX/");
+};
+const esDoc = (n: string) => !esBasura(n) && EXTS_DOC.some((e) => n.toLowerCase().endsWith(e));
+const esZip = (n: string) => !esBasura(n) && n.toLowerCase().endsWith(".zip");
 const MAX_PROFUNDIDAD = 5;
 const MAX_DOCS = 5000; // guarda anti zip-bomb
 
