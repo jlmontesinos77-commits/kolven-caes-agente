@@ -20,7 +20,7 @@ NO validas la correccion legal del documento. Solo identificas, asignas y fechas
 
 REGLAS:
 - Clave del tipo: elige la 'clave' del catalogo que mejor encaje. Si NINGUNA encaja con seguridad razonable, devuelve clave_doc_tipo=null (se marcara para revision manual).
-- CIF empresa: formato español (letra+8 digitos o similar). Normaliza sin espacios ni guiones. NUNCA inventes un CIF: si no lo ves claro en el documento, pon empresa_cif=null. Es MEJOR null que un CIF dudoso (un CIF mal leido crea empresas duplicadas). El NOMBRE de la empresa es mas fiable que el CIF: extraelo siempre que puedas.
+- CIF empresa: formato español (letra+8 digitos o similar). Normaliza sin espacios ni guiones. NUNCA inventes un CIF: si no lo ves claro en el documento, pon empresa_cif=null. Es MEJOR null que un CIF dudoso (un CIF mal leido crea empresas duplicadas). El NOMBRE de la empresa es mas fiable que el CIF: extraelo siempre que puedas. Si el CIF esta borroso, tachado o poco legible, ponlo a null y añade una alerta "CIF ilegible" — el sistema lo completara desde su base de datos.
 - DNI/NIE trabajador: 8 digitos+letra (DNI) o X/Y/Z+7 digitos+letra (NIE).
 - Fechas: formato ISO YYYY-MM-DD. fecha_emision = cuando se emite/firma. fecha_validez = hasta cuando vale; si el documento no la indica pero el TIPO tiene caducidad conocida (p.ej. reconocimiento medico = 1 año), calcula fecha_validez = fecha_emision + caducidad e indicalo en 'alertas'.
 - Documentos mensuales (TGSS, RNT/RLC): rellena mes_referencia = primer dia del mes al que corresponde (YYYY-MM-01).
