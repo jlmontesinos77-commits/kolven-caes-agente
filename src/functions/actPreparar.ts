@@ -1,9 +1,7 @@
-// actPreparar.ts — activity prepararPack.
-// Modelo "blobs bajo prefijo": el frontend sube al staging cada fichero (ZIP o
-// suelto) bajo el prefijo {instancia}/{packId}/. Aqui se listan todos:
-//  - un .zip se expande (indice de sus entradas)
-//  - un fichero suelto (pdf/img) entra como un documento mas
-// Devuelve un indice serializable; el contenido lo lee cada clasificarUnDoc.
+// actPreparar.ts — activity prepararPack (con ZIPs anidados recursivos).
+// Recorre los blobs del pack. Cada .zip se expande; si dentro hay mas .zip,
+// se abren tambien, hasta MAX_PROFUNDIDAD niveles. Cada documento se identifica
+// por una "ruta anidada" que clasificarUnDoc usa para volver a extraerlo.
 
 import * as df from "durable-functions";
 import { InvocationContext } from "@azure/functions";
@@ -14,64 +12,86 @@ import { listarPorPrefijo, descargarBlob } from "../shared/blob";
 
 const EXTS_DOC = [".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif"];
 const esDoc = (n: string) => EXTS_DOC.some((e) => n.toLowerCase().endsWith(e));
+const esZip = (n: string) => n.toLowerCase().endsWith(".zip");
+const MAX_PROFUNDIDAD = 5;
+const MAX_DOCS = 5000; // guarda anti zip-bomb
+
+// Recorre un JSZip; documentos -> lista; sub-zips -> recursion.
+// rutaZip: cadena de entradas zip que llevan hasta este nivel (para reextraer).
+async function recorrerZip(
+  zip: JSZip,
+  blobBase: string,
+  rutaZip: string[],
+  nivel: number,
+  docs: any[],
+  pistas: string[]
+): Promise<void> {
+  if (nivel > MAX_PROFUNDIDAD || docs.length >= MAX_DOCS) return;
+  const entries = Object.values(zip.files).filter((f: any) => !f.dir);
+  for (const e of entries as any[]) {
+    if (docs.length >= MAX_DOCS) break;
+    const nombre = e.name.split("/").pop() || e.name;
+    if (esDoc(e.name)) {
+      docs.push({
+        fuente: "zip",
+        blob: blobBase,
+        rutaZip: rutaZip,          // zips anidados a atravesar
+        entrada: e.name,           // ruta de la entrada dentro del ultimo zip
+        nombre,
+        // pista de empresa: nombres de los zips contenedores (util para clasificar)
+        pista: pistas.join(" / ") || null,
+      });
+    } else if (esZip(e.name)) {
+      // Sub-zip: descomprimir y recursar
+      const subBuf = await e.async("uint8array");
+      const subZip = await JSZip.loadAsync(subBuf);
+      const nombreSubZip = (e.name.split("/").pop() || e.name).replace(/\.zip$/i, "");
+      await recorrerZip(subZip, blobBase, [...rutaZip, e.name], nivel + 1, docs, [...pistas, nombreSubZip]);
+    }
+  }
+}
 
 df.app.activity("prepararPack", {
   handler: async (input: { origen: string; trabajoId: string; packId: string }, ctx: InvocationContext) => {
     try {
       const supa = new Supa(tenantConfig(input.origen));
-
       const packs = await supa.select<any>("caes_pack", `id=eq.${input.packId}&select=*`);
       if (packs.length === 0) return { ok: false, error: `pack ${input.packId} no existe` };
       const pack = packs[0];
       const instanciaId = pack.instancia_id;
       await supa.update("caes_pack", `id=eq.${input.packId}`, { estado: "procesando" });
 
-      // Prefijo del pack en el staging
-      const prefijo = pack.blob_path; // el frontend usa {instancia}/{packId}/ como blob_path base
+      const prefijo = pack.blob_path;
       const blobs = await listarPorPrefijo(prefijo);
       if (blobs.length === 0) return { ok: false, error: `sin ficheros en ${prefijo}` };
 
-      // Construir indice unificado: cada item = {origen:'zip'|'suelto', blob, entrada?, nombre}
       const documentos: any[] = [];
       for (const b of blobs) {
-        const lower = b.name.toLowerCase();
-        if (lower.endsWith(".zip")) {
-          // expandir: listar entradas del zip (sin extraer aun el contenido)
+        if (documentos.length >= MAX_DOCS) break;
+        if (esZip(b.name)) {
           const buf = await descargarBlob(b.name);
           const zip = await JSZip.loadAsync(buf);
-          let idx = 0;
-          const entries = Object.values(zip.files).filter((f: any) => !f.dir);
-          for (const e of entries) {
-            if (esDoc(e.name)) {
-              documentos.push({
-                fuente: "zip", blob: b.name, indice: idx,
-                nombre: e.name.split("/").pop() || e.name,
-              });
-            }
-            idx++;
-          }
+          const nombreZip = (b.name.split("/").pop() || b.name).replace(/\.zip$/i, "");
+          await recorrerZip(zip, b.name, [], 1, documentos, [nombreZip]);
         } else if (esDoc(b.name)) {
           documentos.push({
-            fuente: "suelto", blob: b.name, indice: -1,
-            nombre: b.name.split("/").pop() || b.name,
+            fuente: "suelto", blob: b.name, entrada: null, rutaZip: [],
+            nombre: b.name.split("/").pop() || b.name, pista: null,
           });
         }
       }
 
-      // Catalogo de tipos activos
       const catalogo = await supa.select<any>(
         "prl_doc_tipo",
         `activo=eq.true&select=clave,ambito,categoria,nombre,aviso_dias_antes&order=orden.asc`
       );
 
-      // Drive y ruta destino (Kolven: KAPPA)
       const obra = await supa.select<any>("prl_obra_meta", `instancia_id=eq.${instanciaId}&select=obra_nombre`);
       const obraNombre = obra[0]?.obra_nombre || `obra_${instanciaId.slice(0, 8)}`;
       const driveId = process.env["KAPPA_DRIVE_ID"] || "";
       const rutaBasePartes = [obraNombre, "CAE", "Clasificado"];
 
       await supa.update("caes_pack", `id=eq.${input.packId}`, { total_docs: documentos.length });
-
       return { ok: true, instanciaId, documentos, catalogo, driveId, rutaBasePartes };
     } catch (e: any) {
       ctx.error(`prepararPack fallo: ${e?.message}`);

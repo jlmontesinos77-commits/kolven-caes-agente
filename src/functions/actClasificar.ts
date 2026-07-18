@@ -1,6 +1,7 @@
-// actClasificar.ts — activity clasificarUnDoc (fan-out).
-// Cada doc trae 'fuente': 'zip' (extraer del zip por indice) o 'suelto'
-// (descargar el blob directo). El ZIP se cachea por instancia de worker.
+// actClasificar.ts — activity clasificarUnDoc (fan-out, soporta zips anidados).
+// doc.rutaZip = [zip1, zip2, ...] entradas zip a atravesar desde el blob base.
+// doc.entrada = ruta del fichero dentro del ultimo zip.
+// Cache de zips por clave (blob + rutaZip) dentro de la instancia de worker.
 
 import * as df from "durable-functions";
 import { InvocationContext } from "@azure/functions";
@@ -12,15 +13,30 @@ import { construirSystem, DocTipoCatalogo } from "../shared/prompt";
 import { clasificarDocumento, CtxDoc } from "../shared/clasificar";
 
 const zipCache = new Map<string, JSZip>();
-async function getZip(blob: string): Promise<JSZip> {
+function cacheGuard() { if (zipCache.size > 6) { const k = zipCache.keys().next().value; if (k) zipCache.delete(k); } }
+
+async function getZipBase(blob: string): Promise<JSZip> {
   const hit = zipCache.get(blob);
   if (hit) return hit;
   const buf = await descargarBlob(blob);
   const zip = await JSZip.loadAsync(buf);
-  zipCache.set(blob, zip);
-  if (zipCache.size > 3) {
-    const first = zipCache.keys().next().value;
-    if (first) zipCache.delete(first);
+  zipCache.set(blob, zip); cacheGuard();
+  return zip;
+}
+
+// Navega la cadena de zips anidados hasta el zip que contiene 'entrada'
+async function resolverZipFinal(blob: string, rutaZip: string[]): Promise<JSZip> {
+  let zip = await getZipBase(blob);
+  let clave = blob;
+  for (const entradaZip of rutaZip) {
+    clave += "|" + entradaZip;
+    const hit = zipCache.get(clave);
+    if (hit) { zip = hit; continue; }
+    const f = zip.file(entradaZip);
+    if (!f) throw new Error(`sub-zip no hallado: ${entradaZip}`);
+    const sub = await JSZip.loadAsync(await f.async("uint8array"));
+    zipCache.set(clave, sub); cacheGuard();
+    zip = sub;
   }
   return zip;
 }
@@ -31,38 +47,35 @@ df.app.activity("clasificarUnDoc", {
     try {
       const supa = new Supa(tenantConfig(origen));
 
-      // Obtener el contenido segun la fuente
       let contenido: Uint8Array;
       if (doc.fuente === "zip") {
-        const zip = await getZip(doc.blob);
-        const entries = Object.values(zip.files).filter((f: any) => !f.dir);
-        const entry: any = entries[doc.indice];
-        if (!entry) return { archivo: doc.nombre, ok: false, revision: true, error: `indice ${doc.indice} no hallado` };
-        contenido = await entry.async("uint8array");
+        const zip = await resolverZipFinal(doc.blob, doc.rutaZip || []);
+        const f = zip.file(doc.entrada);
+        if (!f) return { archivo: doc.nombre, ok: false, revision: true, error: `entrada no hallada: ${doc.entrada}` };
+        contenido = await f.async("uint8array");
       } else {
         contenido = new Uint8Array(await descargarBlob(doc.blob));
       }
 
-      // Mapa clave -> {id, aviso}
       const tiposConId = await supa.select<any>("prl_doc_tipo", `activo=eq.true&select=id,clave,aviso_dias_antes`);
       const claveToId = new Map<string, { id: string; aviso: number }>();
       for (const t of tiposConId) claveToId.set(t.clave, { id: t.id, aviso: t.aviso_dias_antes ?? 30 });
 
       const ctxDoc: CtxDoc = {
-        supa,
-        system: construirSystem(catalogo as DocTipoCatalogo[]),
+        supa, system: construirSystem(catalogo as DocTipoCatalogo[]),
         instanciaId, packId, driveId, rutaBasePartes, claveToId,
       };
 
-      const res = await clasificarDocumento(ctxDoc, doc.nombre, contenido);
+      // Pasar pista de empresa (nombre de zips contenedores) al nombre para ayudar a la IA
+      const nombreConPista = doc.pista ? `${doc.nombre} [origen: ${doc.pista}]` : doc.nombre;
+      const res = await clasificarDocumento(ctxDoc, nombreConPista, contenido);
 
-      // progreso incremental (best-effort)
       try {
         const packs = await supa.select<any>("caes_pack", `id=eq.${packId}&select=procesados`);
         await supa.update("caes_pack", `id=eq.${packId}`, { procesados: (packs[0]?.procesados ?? 0) + 1 });
       } catch { /* no critico */ }
 
-      return res;
+      return { ...res, archivo: doc.nombre };
     } catch (e: any) {
       ctx.error(`clasificarUnDoc ${doc?.nombre} fallo: ${e?.message}`);
       return { archivo: doc?.nombre, ok: false, revision: true, error: String(e?.message ?? e) };
