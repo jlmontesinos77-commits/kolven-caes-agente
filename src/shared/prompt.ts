@@ -25,6 +25,7 @@ REGLAS:
 - Fechas: formato ISO YYYY-MM-DD. fecha_emision = cuando se emite/firma. fecha_validez = hasta cuando vale; si el documento no la indica pero el TIPO tiene caducidad conocida (p.ej. reconocimiento medico = 1 año), calcula fecha_validez = fecha_emision + caducidad e indicalo en 'alertas'.
 - Documentos mensuales (TGSS, RNT/RLC): rellena mes_referencia = primer dia del mes al que corresponde (YYYY-MM-01).
 - confidence: 0.0 a 1.0. Baja (<0.7) si el texto es ambiguo, esta incompleto o la clasificacion es dudosa.
+- alertas: cada alerta es CORTA y TELEGRAFICA (máximo ~8 palabras), como una etiqueta de aviso, NO una frase larga ni un párrafo explicativo. Ejemplos correctos: "CIF ilegible", "Sin fecha de caducidad", "Máquinas sin matrícula", "DNI no visible", "Documento firmado 28/10/2024". Máximo 4 alertas, solo lo esencial que un técnico deba revisar. NUNCA vuelques todo tu razonamiento aquí: solo avisos accionables y breves.
 
 Responde SOLO con un objeto JSON, sin texto alrededor, con esta forma exacta:
 {
