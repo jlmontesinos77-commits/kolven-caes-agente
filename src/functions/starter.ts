@@ -28,12 +28,13 @@ async function sasSubida(req: HttpRequest, ctx: InvocationContext): Promise<Http
   }
   const body: any = await req.json().catch(() => ({}));
   const instanciaId = body.instancia_id;
-  const nombreZip = (body.nombre_zip ?? "paquete.zip").replace(/[^\w.\-]/g, "_");
-  if (!instanciaId) return { status: 400, jsonBody: { error: "falta instancia_id" } };
+  const packId = body.pack_id;
+  const nombre = (body.nombre ?? "documento").replace(/[^\w.\-]/g, "_");
+  if (!instanciaId || !packId) return { status: 400, jsonBody: { error: "falta instancia_id o pack_id" } };
 
-  // ruta unica: {instancia}/{timestamp}_{nombre}
-  const blobPath = `${instanciaId}/${Date.now()}_${nombreZip}`;
-  const { url } = generarSasSubida(blobPath, 60);
+  // prefijo del pack: {instancia}/{packId}/  -> el agente lista todo lo de aqui
+  const blobPath = `${instanciaId}/${packId}/${Date.now()}_${nombre}`;
+  const { url } = generarSasSubida(blobPath, 120);
   return { status: 200, jsonBody: { upload_url: url, blob_path: blobPath, container: CFG.blobContainer() } };
 }
 

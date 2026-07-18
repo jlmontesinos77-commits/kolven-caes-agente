@@ -33,13 +33,12 @@ const orchestrator: OrchestrationHandler = function* (ctx: OrchestrationContext)
   const total = prep.documentos.length;
   ctx.df.setCustomStatus({ fase: "clasificando", pack: packId, total, generados: 0 });
 
-  // 3) Fan-out: una activity por documento
+  // 3) Fan-out: una activity por documento (doc trae fuente/blob/indice/nombre)
   const tareas = prep.documentos.map((doc: any) =>
     ctx.df.callActivity("clasificarUnDoc", {
       origen, packId, instanciaId: prep.instanciaId,
       driveId: prep.driveId, rutaBasePartes: prep.rutaBasePartes,
-      catalogo: prep.catalogo,
-      blobPath: prep.blobPath, archivo: doc.nombre, indice: doc.indice,
+      catalogo: prep.catalogo, doc,
     })
   );
   const resultados: any[] = yield ctx.df.Task.all(tareas);

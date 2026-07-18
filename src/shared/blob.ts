@@ -51,11 +51,31 @@ export async function descargarZip(blobPath: string): Promise<Buffer> {
   return await blob.downloadToBuffer();
 }
 
-export async function borrarZip(blobPath: string): Promise<void> {
+// Descarga un blob individual a Buffer
+export async function descargarBlob(blobPath: string): Promise<Buffer> {
+  const svc = BlobServiceClient.fromConnectionString(CFG.blobConn());
+  const container = svc.getContainerClient(CFG.blobContainer());
+  return await container.getBlobClient(blobPath).downloadToBuffer();
+}
+
+// Lista los blobs bajo un prefijo (p.ej. todos los ficheros de un pack)
+export async function listarPorPrefijo(prefijo: string): Promise<{ name: string; size: number }[]> {
+  const svc = BlobServiceClient.fromConnectionString(CFG.blobConn());
+  const container = svc.getContainerClient(CFG.blobContainer());
+  const out: { name: string; size: number }[] = [];
+  for await (const b of container.listBlobsFlat({ prefix: prefijo })) {
+    out.push({ name: b.name, size: b.properties.contentLength ?? 0 });
+  }
+  return out;
+}
+
+export async function borrarPrefijo(prefijo: string): Promise<void> {
   try {
     const svc = BlobServiceClient.fromConnectionString(CFG.blobConn());
     const container = svc.getContainerClient(CFG.blobContainer());
-    await container.getBlobClient(blobPath).deleteIfExists();
+    for await (const b of container.listBlobsFlat({ prefix: prefijo })) {
+      await container.getBlobClient(b.name).deleteIfExists();
+    }
   } catch {
     // best-effort; el lifecycle lo purga igual
   }
