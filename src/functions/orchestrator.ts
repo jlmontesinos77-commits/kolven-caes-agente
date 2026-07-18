@@ -33,15 +33,24 @@ const orchestrator: OrchestrationHandler = function* (ctx: OrchestrationContext)
   const total = prep.documentos.length;
   ctx.df.setCustomStatus({ fase: "clasificando", pack: packId, total, generados: 0 });
 
-  // 3) Fan-out: una activity por documento (doc trae fuente/blob/indice/nombre)
-  const tareas = prep.documentos.map((doc: any) =>
-    ctx.df.callActivity("clasificarUnDoc", {
-      origen, packId, instanciaId: prep.instanciaId,
-      driveId: prep.driveId, rutaBasePartes: prep.rutaBasePartes,
-      catalogo: prep.catalogo, doc,
-    })
-  );
-  const resultados: any[] = yield ctx.df.Task.all(tareas);
+  // 3) Fan-out POR LOTES: procesar de LOTE en LOTE evita saturar Graph con
+  //    cientos de creaciones de carpeta en paralelo (throttling 429).
+  const LOTE = 8;
+  const docs: any[] = prep.documentos;
+  const resultados: any[] = [];
+  for (let i = 0; i < docs.length; i += LOTE) {
+    const grupo = docs.slice(i, i + LOTE);
+    const tareas = grupo.map((doc: any) =>
+      ctx.df.callActivity("clasificarUnDoc", {
+        origen, packId, instanciaId: prep.instanciaId,
+        driveId: prep.driveId, rutaBasePartes: prep.rutaBasePartes,
+        catalogo: prep.catalogo, doc,
+      })
+    );
+    const parcial: any[] = yield ctx.df.Task.all(tareas);
+    for (const r of parcial) resultados.push(r);
+    ctx.df.setCustomStatus({ fase: "clasificando", pack: packId, total: docs.length, procesados: resultados.length });
+  }
 
   // 4) Agregar
   const okCount = resultados.filter((r) => r.ok).length;
