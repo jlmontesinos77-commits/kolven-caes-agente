@@ -18,7 +18,12 @@ export interface TextoExtraido {
 async function extraerNativo(buf: Uint8Array): Promise<{ texto: string; paginas: number } | null> {
   try {
     const { extractText, getDocumentProxy } = await import("unpdf");
-    const pdf = await getDocumentProxy(buf);
+    // COPIA del buffer: unpdf/PDF.js detacha (consume) el ArrayBuffer que recibe.
+    // Si reutilizamos el original (cache de ZIP), la 2a lectura falla con
+    // "detached ArrayBuffer". Una copia fresca por lectura lo evita.
+    const copia = new Uint8Array(buf.length);
+    copia.set(buf);
+    const pdf = await getDocumentProxy(copia);
     const { text, totalPages } = await extractText(pdf, { mergePages: true });
     const texto = Array.isArray(text) ? text.join("\n") : text;
     return { texto: texto ?? "", paginas: totalPages ?? 0 };
@@ -65,7 +70,11 @@ async function ocrAzure(buf: Uint8Array, contentType: string): Promise<{ texto: 
 }
 
 // Entrada principal: decide nativo vs OCR
-export async function extraerTexto(buf: Uint8Array, nombre: string): Promise<TextoExtraido> {
+export async function extraerTexto(bufOrig: Uint8Array, nombre: string): Promise<TextoExtraido> {
+  // Copia aislada: el buffer puede venir de una entrada de ZIP compartida/cacheada.
+  // Trabajar sobre una copia evita "detached ArrayBuffer" entre lecturas.
+  const buf = new Uint8Array(bufOrig.length);
+  buf.set(bufOrig);
   const esPdf = nombre.toLowerCase().endsWith(".pdf");
   const contentType = esPdf ? "application/pdf" : "application/octet-stream";
 
@@ -79,7 +88,9 @@ export async function extraerTexto(buf: Uint8Array, nombre: string): Promise<Tex
     }
   }
 
-  // Escaneado o formato imagen -> OCR
-  const ocr = await ocrAzure(buf, contentType);
+  // Escaneado o formato imagen -> OCR (copia fresca para el fetch)
+  const copiaOcr = new Uint8Array(buf.length);
+  copiaOcr.set(buf);
+  const ocr = await ocrAzure(copiaOcr, contentType);
   return { texto: ocr.texto, paginas: ocr.paginas, metodo: "ocr" };
 }
