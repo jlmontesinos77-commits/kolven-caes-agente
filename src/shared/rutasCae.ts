@@ -21,12 +21,12 @@ function subcarpetaTrabajador(categoria: string | null): string {
   switch (categoria) {
     case "identificacion":
     case "laboral":        return "Personal";
-    case "formacion":      return "Formacion";
-    case "epi":            return "Epi";
+    case "formacion":      return "Formación";
+    case "epi":            return "EPIs";
     case "salud":          return "Reconocimiento";
     case "autorizacion":
     case "gruista":        return "Habilitaciones";
-    case "acogida":        return "Informacion";
+    case "acogida":        return "Información";
     default:               return "Personal"; // fallback conservador
   }
 }
