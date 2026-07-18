@@ -114,8 +114,8 @@ export async function clasificarDocumento(
     // 6) Estado del documento
     const estado = revision ? "aviso" : calcularEstado(cls.fecha_validez, tipoInfo?.aviso ?? 30);
 
-    // 7) Insertar prl_documento
-    await ctx.supa.insert("prl_documento", {
+    // 7) Upsert prl_documento (evita duplicados por ux_prl_doc_emp_tipo)
+    await ctx.supa.upsert("prl_documento", {
       instancia_id: ctx.instanciaId,
       caes_pack_id: ctx.packId,
       doc_tipo_id: tipoInfo?.id ?? null,
@@ -131,7 +131,7 @@ export async function clasificarDocumento(
       revision_manual: revision,
       clasificado_ia: true,
       observaciones: (cls.alertas ?? []).join("; ") || null,
-    });
+    }, "empresa_id,doc_tipo_id");
 
     return {
       archivo, ok: true,

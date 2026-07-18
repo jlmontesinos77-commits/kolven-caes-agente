@@ -49,6 +49,19 @@ export class Supa {
     return arr[0];
   }
 
+  // UPSERT sobre conflicto de columnas (on_conflict). Actualiza si ya existe.
+  async upsert<T = any>(table: string, row: Record<string, any>, onConflict: string): Promise<T> {
+    const url = `${this.cfg.supabaseUrl}/rest/v1/${table}?on_conflict=${encodeURIComponent(onConflict)}`;
+    const r = await fetchConTimeout(url, {
+      method: "POST",
+      headers: { ...this.headers(), Prefer: "resolution=merge-duplicates,return=representation" },
+      body: JSON.stringify(row),
+    }, 30000);
+    if (!r.ok) throw new Error(`UPSERT ${table} fallo ${r.status}: ${await r.text()}`);
+    const arr = (await r.json()) as T[];
+    return arr[0];
+  }
+
   // UPDATE con filtro
   async update(table: string, query: string, patch: Record<string, any>): Promise<void> {
     const url = `${this.cfg.supabaseUrl}/rest/v1/${table}?${query}`;

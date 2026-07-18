@@ -32,7 +32,10 @@ export function sanitizarCarpeta(s: string): string {
     .replace(/[\\/:*?"<>|]/g, "-")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 120);
+    .replace(/[.\s]+$/g, "")   // SharePoint rechaza nombres que terminan en punto o espacio
+    .replace(/^[.\s]+/g, "")   // ni que empiezan por punto
+    .slice(0, 120)
+    .trim() || "sin_nombre";
 }
 
 export function saneFile(s: string): string {
