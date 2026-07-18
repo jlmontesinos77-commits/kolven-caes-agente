@@ -8,6 +8,7 @@ import { llamarModelo, parseJsonTolerante, UsoTokens } from "./anthropic";
 import { BloqueSistema } from "./anthropic";
 import { construirUser } from "./prompt";
 import { subirArchivo } from "./graph";
+import { rutaDentroCss } from "./rutasCae";
 
 export interface ClasificacionIA {
   clave_doc_tipo: string | null;
@@ -57,7 +58,7 @@ export interface CtxDoc {
   packId: string;
   driveId: string;            // KAPPA (kolven) o el que aplique
   rutaBasePartes: string[];   // p.ej. [obra, "CAE", "Clasificado"]
-  claveToId: Map<string, { id: string; aviso: number }>;
+  claveToId: Map<string, { id: string; aviso: number; categoria: string | null; ambito: string | null }>;
 }
 
 export async function clasificarDocumento(
@@ -102,11 +103,21 @@ export async function clasificarDocumento(
       });
     }
 
-    // 5) Archivar en SharePoint (carpeta por empresa)
-    const subcarpeta = cls.empresa_cif || cls.empresa_nombre || "_sin_empresa";
+    // 5) Archivar en SharePoint con jerarquia CAE (03 CSS/Empresa/Trabajadores|Maquinaria/...)
+    const trabajadorNombre = (cls.trabajador_apellidos || cls.trabajador_nombre)
+      ? `${(cls.trabajador_apellidos || "").trim()}${cls.trabajador_apellidos && cls.trabajador_nombre ? ", " : ""}${(cls.trabajador_nombre || "").trim()}`.trim()
+      : null;
+    const subRuta = rutaDentroCss({
+      ambito: cls.ambito,
+      categoria: tipoInfo?.categoria ?? null,
+      claveDocTipo: cls.clave_doc_tipo,
+      empresaNombre: cls.empresa_nombre,
+      trabajadorNombre,
+      matricula: cls.matricula_maquina,
+    });
     const webUrl = await subirArchivo(
       ctx.driveId,
-      [...ctx.rutaBasePartes, subcarpeta],
+      [...ctx.rutaBasePartes, ...subRuta],
       archivo,
       contenido
     );
@@ -152,8 +163,8 @@ async function guardarSinClasificar(
   ctx: CtxDoc, archivo: string, contenido: Uint8Array, motivo: string
 ): Promise<ResultadoDoc> {
   try {
-    const webUrl = await subirArchivo(ctx.driveId, [...ctx.rutaBasePartes, "_sin_clasificar"], archivo, contenido);
-    await ctx.supa.insert("prl_documento", {
+    const webUrl = await subirArchivo(ctx.driveId, [...ctx.rutaBasePartes, "_Sin clasificar"], archivo, contenido);
+    await ctx.supa.rpc("caes_guardar_documento", { p_doc: {
       instancia_id: ctx.instanciaId,
       caes_pack_id: ctx.packId,
       doc_tipo_id: null,
@@ -164,7 +175,7 @@ async function guardarSinClasificar(
       revision_manual: true,
       clasificado_ia: true,
       observaciones: `Sin clasificar: ${motivo}`,
-    });
+    }});
   } catch { /* best-effort */ }
   return { archivo, ok: true, clave: null, confidence: 0, revision: true, estado: "aviso" };
 }

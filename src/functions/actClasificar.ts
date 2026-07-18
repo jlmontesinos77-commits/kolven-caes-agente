@@ -57,9 +57,9 @@ df.app.activity("clasificarUnDoc", {
         contenido = new Uint8Array(await descargarBlob(doc.blob));
       }
 
-      const tiposConId = await supa.select<any>("prl_doc_tipo", `activo=eq.true&select=id,clave,aviso_dias_antes`);
-      const claveToId = new Map<string, { id: string; aviso: number }>();
-      for (const t of tiposConId) claveToId.set(t.clave, { id: t.id, aviso: t.aviso_dias_antes ?? 30 });
+      const tiposConId = await supa.select<any>("prl_doc_tipo", `activo=eq.true&select=id,clave,aviso_dias_antes,categoria,ambito`);
+      const claveToId = new Map<string, { id: string; aviso: number; categoria: string | null; ambito: string | null }>();
+      for (const t of tiposConId) claveToId.set(t.clave, { id: t.id, aviso: t.aviso_dias_antes ?? 30, categoria: t.categoria ?? null, ambito: t.ambito ?? null });
 
       const ctxDoc: CtxDoc = {
         supa, system: construirSystem(catalogo as DocTipoCatalogo[]),

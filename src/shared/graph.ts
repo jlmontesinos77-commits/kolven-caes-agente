@@ -72,6 +72,64 @@ async function ensureRuta(driveId: string, partes: string[]): Promise<string> {
   return parentPath;
 }
 
+// Busca una subcarpeta por PREFIJO dentro de una carpeta (tolerante a nombres largos).
+async function buscarCarpetaPorPrefijo(driveId: string, parentPath: string, prefijo: string): Promise<string | null> {
+  const token = await tokenAppOnly();
+  const seg = parentPath === "" ? "root" : `root:/${parentPath.split("/").map(encodeURIComponent).join("/")}:`;
+  const url = `https://graph.microsoft.com/v1.0/drives/${driveId}/${seg}/children?$select=name,folder&$top=200`;
+  const r = await fetchConTimeout(url, { headers: { Authorization: `Bearer ${token}` } }, 30000);
+  if (!r.ok) return null;
+  const j: any = await r.json();
+  const pref = prefijo.toLowerCase();
+  for (const it of j.value ?? []) {
+    if (it.folder && (it.name || "").toLowerCase().startsWith(pref)) return it.name;
+  }
+  return null;
+}
+
+function normNombre(s: string): string {
+  return (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+}
+
+// Busca carpeta por nombre tolerante (mayus/acentos/puntuacion y erratas parciales)
+async function buscarCarpetaTolerante(driveId: string, parentPath: string, nombre: string): Promise<string | null> {
+  const token = await tokenAppOnly();
+  const seg = parentPath === "" ? "root" : `root:/${parentPath.split("/").map(encodeURIComponent).join("/")}:`;
+  const url = `https://graph.microsoft.com/v1.0/drives/${driveId}/${seg}/children?$select=name,folder&$top=400`;
+  const r = await fetchConTimeout(url, { headers: { Authorization: `Bearer ${token}` } }, 30000);
+  if (!r.ok) return null;
+  const j: any = await r.json();
+  const objetivo = normNombre(nombre);
+  let mejor: string | null = null;
+  for (const it of j.value ?? []) {
+    if (!it.folder) continue;
+    const n = normNombre(it.name);
+    if (n === objetivo) return it.name;
+    if (!mejor && (n.includes(objetivo) || objetivo.includes(n))) mejor = it.name;
+  }
+  return mejor;
+}
+
+export interface RutaPedido {
+  cliente: string;
+  numeroPedido: string;
+  itemCode: string;
+}
+
+// Resuelve "{cliente}/{26-XXXX...}/{INS-CON...}/Trabajo" en KAPPA por prefijos.
+export async function resolverRutaTrabajo(driveId: string, r: RutaPedido): Promise<string[]> {
+  const cli = await buscarCarpetaTolerante(driveId, "", r.cliente);
+  if (!cli) throw new Error(`carpeta cliente no hallada: ${r.cliente}`);
+  const prefPedido = r.numeroPedido.replace(/^PED-/, "").replace(/^\d{2}/, "");
+  const ped = await buscarCarpetaPorPrefijo(driveId, cli, prefPedido);
+  if (!ped) throw new Error(`carpeta pedido no hallada: ${prefPedido} en ${cli}`);
+  const p = r.itemCode.split("-");
+  const prefItem = p.length > 2 ? `${p[0]}-${p[1]}` : r.itemCode;
+  const item = await buscarCarpetaPorPrefijo(driveId, `${cli}/${ped}`, prefItem);
+  if (!item) throw new Error(`carpeta item no hallada: ${prefItem} en ${cli}/${ped}`);
+  return [cli, ped, item, "Trabajo"];
+}
+
 // Sube un fichero (replace) a driveId en la ruta indicada; devuelve webUrl
 export async function subirArchivo(
   driveId: string,

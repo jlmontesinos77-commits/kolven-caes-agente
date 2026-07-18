@@ -9,6 +9,7 @@ import JSZip from "jszip";
 import { Supa } from "../shared/supa";
 import { tenantConfig } from "../shared/config";
 import { listarPorPrefijo, descargarBlob } from "../shared/blob";
+import { resolverRutaTrabajo } from "../shared/graph";
 
 const EXTS_DOC = [".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif"];
 // Ignora basura de macOS: AppleDouble (._archivo) y carpeta __MACOSX
@@ -91,10 +92,23 @@ df.app.activity("prepararPack", {
         `activo=eq.true&select=clave,ambito,categoria,nombre,aviso_dias_antes&order=orden.asc`
       );
 
-      const obra = await supa.select<any>("prl_obra_meta", `instancia_id=eq.${instanciaId}&select=obra_nombre`);
-      const obraNombre = obra[0]?.obra_nombre || `obra_${instanciaId.slice(0, 8)}`;
       const driveId = process.env["KAPPA_DRIVE_ID"] || "";
-      const rutaBasePartes = [obraNombre, "CAE", "Clasificado"];
+
+      // Resolver ruta base del pedido en KAPPA: {cliente}/{26-XXXX}/{item}/Trabajo/03 CSS
+      let rutaBasePartes: string[];
+      try {
+        const datos = await supa.rpc<any>("caes_datos_pedido", { p_instancia: instanciaId });
+        const d = Array.isArray(datos) ? datos[0] : datos;
+        const trabajo = await resolverRutaTrabajo(driveId, {
+          cliente: d.cliente, numeroPedido: d.numero_pedido, itemCode: d.item_code,
+        });
+        rutaBasePartes = [...trabajo, "03 CSS"];
+      } catch (e: any) {
+        ctx.error(`resolverRutaTrabajo fallo, usando fallback: ${e?.message}`);
+        // Fallback: no bloquea la clasificacion; archiva en una ruta plana KAPPA
+        const obra = await supa.select<any>("prl_obra_meta", `instancia_id=eq.${instanciaId}&select=obra_nombre`);
+        rutaBasePartes = [obra[0]?.obra_nombre || `obra_${instanciaId.slice(0,8)}`, "CAE", "03 CSS"];
+      }
 
       await supa.update("caes_pack", `id=eq.${input.packId}`, { total_docs: documentos.length });
       return { ok: true, instanciaId, documentos, catalogo, driveId, rutaBasePartes };
