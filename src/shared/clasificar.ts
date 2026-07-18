@@ -114,24 +114,27 @@ export async function clasificarDocumento(
     // 6) Estado del documento
     const estado = revision ? "aviso" : calcularEstado(cls.fecha_validez, tipoInfo?.aviso ?? 30);
 
-    // 7) Upsert prl_documento (evita duplicados por ux_prl_doc_emp_tipo)
-    await ctx.supa.upsert("prl_documento", {
-      instancia_id: ctx.instanciaId,
-      caes_pack_id: ctx.packId,
-      doc_tipo_id: tipoInfo?.id ?? null,
-      empresa_id: empresaId,
-      trabajador_id: trabajadorId,
-      estado,
-      nombre_archivo: archivo,
-      sharepoint_url: webUrl,
-      fecha_emision: cls.fecha_emision,
-      fecha_validez: cls.fecha_validez,
-      mes_referencia: cls.mes_referencia,
-      confidence: cls.confidence,
-      revision_manual: revision,
-      clasificado_ia: true,
-      observaciones: (cls.alertas ?? []).join("; ") || null,
-    }, "empresa_id,doc_tipo_id");
+    // 7) Guardar prl_documento vía RPC (delete-before-insert; los indices unicos
+    //    son parciales y PostgREST no puede on_conflict con ellos)
+    await ctx.supa.rpc("caes_guardar_documento", {
+      p_doc: {
+        instancia_id: ctx.instanciaId,
+        caes_pack_id: ctx.packId,
+        doc_tipo_id: tipoInfo?.id ?? null,
+        empresa_id: empresaId,
+        trabajador_id: trabajadorId,
+        estado,
+        nombre_archivo: archivo,
+        sharepoint_url: webUrl,
+        fecha_emision: cls.fecha_emision,
+        fecha_validez: cls.fecha_validez,
+        mes_referencia: cls.mes_referencia,
+        confidence: cls.confidence,
+        revision_manual: revision,
+        clasificado_ia: true,
+        observaciones: (cls.alertas ?? []).join("; ") || null,
+      },
+    });
 
     return {
       archivo, ok: true,
