@@ -66,3 +66,26 @@ export function rutaDentroCss(d: DatosRuta): string[] {
   // 4) Empresa (incluye recurso preventivo)
   return [empSeg];
 }
+
+// Resuelve la ruta base del pedido en KAPPA ({cliente}/{26-XXXX}/{item}/Trabajo/03 CSS),
+// con fallback plano. Compartido por el fan-out (actPreparar) y la subida contextual
+// sincrona (starter /api/clasificar-uno) para no duplicar la logica.
+import { resolverRutaTrabajo } from "./graph";
+import type { Supa } from "./supa";
+export async function prepararRutaBase(
+  supa: Supa, driveId: string, instanciaId: string,
+  log?: (m: string) => void
+): Promise<string[]> {
+  try {
+    const datos = await supa.rpc<any>("caes_datos_pedido", { p_instancia: instanciaId });
+    const d = Array.isArray(datos) ? datos[0] : datos;
+    const trabajo = await resolverRutaTrabajo(driveId, {
+      cliente: d.cliente, numeroPedido: d.numero_pedido, itemCode: d.item_code,
+    });
+    return [...trabajo, "03 CSS"];
+  } catch (e: any) {
+    log?.(`prepararRutaBase fallback: ${e?.message}`);
+    const obra = await supa.select<any>("prl_obra_meta", `instancia_id=eq.${instanciaId}&select=obra_nombre`);
+    return [obra[0]?.obra_nombre || `obra_${instanciaId.slice(0, 8)}`, "CAE", "03 CSS"];
+  }
+}

@@ -61,6 +61,15 @@ export interface CtxDoc {
   driveId: string;            // KAPPA (kolven) o el que aplique
   rutaBasePartes: string[];   // p.ej. [obra, "CAE", "Clasificado"]
   claveToId: Map<string, { id: string; aviso: number; categoria: string | null; ambito: string | null }>;
+  // MODELO CONTROLADO:
+  // - Si empresaFijada/trabajadorFijado vienen informados (subida contextual desde
+  //   el panel, "subir dentro de ROURE"), el clasificador NO resuelve empresa: usa
+  //   el titular que le da el usuario. Cero ambiguedad de OCR de nombres.
+  // - Si no vienen (ZIP masivo), el clasificador CASA contra empresas/trabajadores
+  //   existentes por CIF/DNI. NUNCA crea empresas. Lo que no casa -> sin asignar.
+  empresaFijada?: string | null;
+  trabajadorFijado?: string | null;
+  maquinariaFijada?: string | null;
 }
 
 export async function clasificarDocumento(
@@ -86,42 +95,71 @@ export async function clasificarDocumento(
     const tipoInfo = cls.clave_doc_tipo ? ctx.claveToId.get(cls.clave_doc_tipo) : undefined;
     const revision = !tipoInfo || (cls.confidence ?? 0) < UMBRAL_REVISION;
 
-    // 4) Resolver empresa / trabajador (idempotente via RPC, atomico con advisory lock).
-    //    Se resuelve si hay CIF O nombre (antes solo con CIF -> duplicados/_SIN EMPRESA).
+    // 4) Determinar titular del documento segun el MODELO CONTROLADO.
     let empresaId: string | null = null;
     let trabajadorId: string | null = null;
+    let maquinariaId: string | null = null;
     let empresaNombreCanonico: string | null = null;
     let trabajadorNombreCanonico: string | null = null;
+    let sinAsignar = false;
+    let pistaSinAsignar: string | null = null;
 
-    // Filtro determinista de PROVEEDORES: nombres de academias, mutuas, centros
-    // medicos y servicios de prevencion NO son la empresa titular del trabajador,
-    // AUNQUE traigan CIF (un SPA/mutua tiene CIF pero no es la contrata). Si ademas
-    // el doc es de formacion/salud/epi y no trae CIF de empresa, tambien se descarta.
-    const nombreEmpresaIA = (cls.empresa_nombre || "").trim();
-    const esProveedor = /\b(PREVENCION|PREVENCIÓN|SERVICIO DE PREVENCION|SPA|MUTUA|FREMAP|ASEPEYO|QUIRON|QUIRÓN|UNIÓN DE MUTUAS|UMIVALE|CENTRO M[EÉ]DICO|CENTRO DE FORMACION|CENTRO DE FORMACIÓN|ACADEMIA|FORMACION|FORMACIÓN|DICONSAL|IGS|SALUD LABORAL|GESTIONES PREVENTIVAS|VIGILANCIA DE LA SALUD)\b/i.test(nombreEmpresaIA);
-    const catNoEmpresa = tipoInfo?.categoria === "formacion" || tipoInfo?.categoria === "salud" || tipoInfo?.categoria === "epi";
-    // Proveedor -> descartar SIEMPRE (aunque tenga CIF). Sin CIF en doc de
-    // formacion/salud/epi -> descartar tambien.
-    const descartarEmpresa = esProveedor || (catNoEmpresa && !cls.empresa_cif);
-    const nombreEmpresaFiable = nombreEmpresaIA && !descartarEmpresa ? nombreEmpresaIA : null;
-    const cifFiable = descartarEmpresa ? null : cls.empresa_cif;
+    const hayTitularFijado = !!(ctx.empresaFijada || ctx.trabajadorFijado || ctx.maquinariaFijada);
 
-    if (cifFiable || nombreEmpresaFiable) {
-      empresaId = await ctx.supa.rpc<string>("caes_resolver_empresa", {
+    if (hayTitularFijado) {
+      // --- MODO A: titular FIJADO por el usuario (subida contextual) ---
+      // No se resuelve nada: el usuario manda. Solo se clasifica el tipo (ya hecho).
+      trabajadorId = ctx.trabajadorFijado ?? null;
+      maquinariaId = ctx.maquinariaFijada ?? null;
+      if (trabajadorId) {
+        // heredar empresa del trabajador para coherencia de arbol
+        const t = await ctx.supa.select<any>("prl_trabajador", `id=eq.${trabajadorId}&select=empresa_id`);
+        empresaId = t[0]?.empresa_id ?? null;
+      } else {
+        empresaId = ctx.empresaFijada ?? null;
+      }
+    } else {
+      // --- MODO B: ZIP masivo. CASAR contra existentes. NUNCA crear empresa. ---
+      // Filtro de proveedores (mutuas/SPA/academias no son empresa titular).
+      const nombreEmpresaIA = (cls.empresa_nombre || "").trim();
+      const esProveedor = /\b(PREVENCION|PREVENCIÓN|SERVICIO DE PREVENCION|SPA|MUTUA|FREMAP|ASEPEYO|QUIRON|QUIRÓN|UNIÓN DE MUTUAS|UMIVALE|CENTRO M[EÉ]DICO|CENTRO DE FORMACION|CENTRO DE FORMACIÓN|ACADEMIA|FORMACION|FORMACIÓN|DICONSAL|IGS|SALUD LABORAL|GESTIONES PREVENTIVAS|VIGILANCIA DE LA SALUD)\b/i.test(nombreEmpresaIA);
+      const cifFiable = esProveedor ? null : (cls.empresa_cif || null);
+
+      // Casar EMPRESA contra existentes (solo match, sin crear).
+      empresaId = await ctx.supa.rpc<string>("caes_casar_empresa", {
         p_instancia: ctx.instanciaId,
         p_cif: cifFiable,
-        p_nombre: nombreEmpresaFiable,
-        p_rol: "subcontrata",
+        p_nombre: esProveedor ? null : (nombreEmpresaIA || null),
       });
-    }
-    if (cls.trabajador_dni) {
-      trabajadorId = await ctx.supa.rpc<string>("caes_resolver_trabajador", {
-        p_instancia: ctx.instanciaId,
-        p_empresa: empresaId,   // puede ser null: el trabajador se completara con otro doc
-        p_dni: cls.trabajador_dni,
-        p_nombre: cls.trabajador_nombre,
-        p_apellidos: cls.trabajador_apellidos,
-      });
+
+      // Casar/crear TRABAJADOR por DNI (el DNI es fiable). Solo si su empresa caso.
+      if (cls.trabajador_dni && empresaId) {
+        trabajadorId = await ctx.supa.rpc<string>("caes_resolver_trabajador", {
+          p_instancia: ctx.instanciaId,
+          p_empresa: empresaId,
+          p_dni: cls.trabajador_dni,
+          p_nombre: cls.trabajador_nombre,
+          p_apellidos: cls.trabajador_apellidos,
+        });
+      } else if (cls.trabajador_dni && !empresaId) {
+        // Hay trabajador pero su empresa no casa -> intentar casar por DNI a un
+        // trabajador YA existente (creado por otro doc). Si existe, cuelga de el.
+        trabajadorId = await ctx.supa.rpc<string>("caes_casar_trabajador", {
+          p_instancia: ctx.instanciaId,
+          p_dni: cls.trabajador_dni,
+        });
+        if (trabajadorId) {
+          const t = await ctx.supa.select<any>("prl_trabajador", `id=eq.${trabajadorId}&select=empresa_id`);
+          empresaId = t[0]?.empresa_id ?? null;
+        }
+      }
+
+      // Si NADA caso -> SIN ASIGNAR. No inventamos empresa. Dejamos pista.
+      if (!empresaId && !trabajadorId && !maquinariaId) {
+        sinAsignar = true;
+        const partes = [nombreEmpresaIA, cls.empresa_cif, cls.trabajador_dni].filter(Boolean);
+        pistaSinAsignar = partes.length ? `Leido: ${partes.join(" / ")}` : "Sin datos de titular";
+      }
     }
 
     // Leer los nombres CANONICOS de la empresa/trabajador resueltos, para que la
@@ -139,20 +177,25 @@ export async function clasificarDocumento(
       }
     }
 
-    // 5) Archivar en SharePoint con jerarquia CAE (03 CSS/Empresa/Trabajadores|Maquinaria/...)
-    //    usando SIEMPRE los nombres canonicos (consolidados), con fallback al crudo.
-    const trabajadorNombre = trabajadorNombreCanonico
-      ?? ((cls.trabajador_apellidos || cls.trabajador_nombre)
-        ? `${(cls.trabajador_apellidos || "").trim()}${cls.trabajador_apellidos && cls.trabajador_nombre ? ", " : ""}${(cls.trabajador_nombre || "").trim()}`.trim()
-        : null);
-    const subRuta = rutaDentroCss({
-      ambito: cls.ambito,
-      categoria: tipoInfo?.categoria ?? null,
-      claveDocTipo: cls.clave_doc_tipo,
-      empresaNombre: empresaNombreCanonico ?? cls.empresa_nombre,
-      trabajadorNombre,
-      matricula: cls.matricula_maquina,
-    });
+    // 5) Archivar en SharePoint. Si el doc quedo SIN ASIGNAR, va a una bandeja
+    //    fisica "_SIN ASIGNAR" (no se crea carpeta de empresa espuria).
+    let subRuta: string[];
+    if (sinAsignar) {
+      subRuta = ["_SIN ASIGNAR"];
+    } else {
+      const trabajadorNombre = trabajadorNombreCanonico
+        ?? ((cls.trabajador_apellidos || cls.trabajador_nombre)
+          ? `${(cls.trabajador_apellidos || "").trim()}${cls.trabajador_apellidos && cls.trabajador_nombre ? ", " : ""}${(cls.trabajador_nombre || "").trim()}`.trim()
+          : null);
+      subRuta = rutaDentroCss({
+        ambito: cls.ambito,
+        categoria: tipoInfo?.categoria ?? null,
+        claveDocTipo: cls.clave_doc_tipo,
+        empresaNombre: empresaNombreCanonico ?? null,
+        trabajadorNombre,
+        matricula: cls.matricula_maquina,
+      });
+    }
     const webUrl = await subirArchivo(
       ctx.driveId,
       [...ctx.rutaBasePartes, ...subRuta],
@@ -161,10 +204,14 @@ export async function clasificarDocumento(
     );
 
     // 6) Estado del documento
-    const estado = revision ? "aviso" : calcularEstado(cls.fecha_validez, tipoInfo?.aviso ?? 30);
+    const estado = revision || sinAsignar ? "aviso" : calcularEstado(cls.fecha_validez, tipoInfo?.aviso ?? 30);
 
-    // 7) Guardar prl_documento vía RPC. La RPC guarda TODO el historico (nunca
-    //    borra) y recalcula el vigente. ok:true SOLO si devuelve un id real.
+    // 7) Guardar prl_documento. Si sinAsignar, los 3 FK van null y la pista del
+    //    titular leido se guarda en observaciones para resolver desde la bandeja.
+    const obsBase = (cls.alertas ?? []).join("; ");
+    const observaciones = sinAsignar
+      ? [pistaSinAsignar, obsBase].filter(Boolean).join(" | ")
+      : (obsBase || null);
     const docId = await ctx.supa.rpc<string>("caes_guardar_documento", {
       p_doc: {
         instancia_id: ctx.instanciaId,
@@ -172,6 +219,7 @@ export async function clasificarDocumento(
         doc_tipo_id: tipoInfo?.id ?? null,
         empresa_id: empresaId,
         trabajador_id: trabajadorId,
+        maquinaria_id: maquinariaId,
         estado,
         nombre_archivo: archivo,
         sharepoint_url: webUrl,
@@ -179,9 +227,9 @@ export async function clasificarDocumento(
         fecha_validez: cls.fecha_validez,
         mes_referencia: cls.mes_referencia,
         confidence: cls.confidence,
-        revision_manual: revision,
+        revision_manual: revision || sinAsignar,
         clasificado_ia: true,
-        observaciones: (cls.alertas ?? []).join("; ") || null,
+        observaciones,
       },
     });
     if (!docId) {
