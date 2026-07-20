@@ -27,12 +27,16 @@ df.app.activity("finalizarTrabajo", {
     const supa = new Supa(tenantConfig(input.origen));
 
     // 1) cerrar trabajo en la cola
+    // p_permanente: fallo determinista (ZIP inexistente/corrupto en preparacion)
+    // -> no reintentar, cerrar a 'error' a la primera. Fallos transitorios omiten
+    // el flag y conservan el reintento con backoff.
     await supa.rpc("agente_completar_trabajo", {
       p_trabajo: input.trabajoId,
       p_worker: input.worker,
       p_ok: input.ok,
       p_salida: input.salida ?? null,
       p_error: input.error ?? null,
+      p_permanente: input.permanente ?? false,
     });
 
     // 2) actualizar progreso/estado del pack

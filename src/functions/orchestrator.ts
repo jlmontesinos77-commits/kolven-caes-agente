@@ -25,7 +25,7 @@ const orchestrator: OrchestrationHandler = function* (ctx: OrchestrationContext)
   if (!prep.ok) {
     yield ctx.df.callActivity("finalizarTrabajo", {
       origen, trabajoId: trabajo.id, worker: trabajo.claim_token, ok: false,
-      error: prep.error, packId, estadoPack: "error",
+      error: prep.error, packId, estadoPack: "error", permanente: true,
     });
     return { estado: "error_preparacion", error: prep.error };
   }
