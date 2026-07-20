@@ -92,6 +92,24 @@ df.app.activity("prepararPack", {
         `activo=eq.true&select=clave,ambito,categoria,nombre,aviso_dias_antes&order=orden.asc`
       );
 
+      // FASE C: ordenar para que los documentos que DEFINEN empresas se procesen
+      // primero (apertura de centro de trabajo = contratista; adhesiones al PSS =
+      // subcontratas; contratos/altas SS). Asi, cuando llega un diploma o un doc
+      // sin empresa clara, la empresa titular del trabajador ya esta resuelta y el
+      // documento se archiva bajo la carpeta correcta en una sola pasada.
+      // La deteccion es por nombre de archivo/pista (aun no conocemos el tipo real,
+      // que lo decide la IA); es una heuristica de ordenacion, no de clasificacion.
+      const prioridadEmpresa = (doc: any): number => {
+        const t = `${doc.nombre || ""} ${doc.pista || ""}`.toLowerCase();
+        // 0 = maxima prioridad (define empresa), 2 = normal
+        if (/apertura|centro de trabajo|comunicacion.*apertura|ar_apertura/.test(t)) return 0;
+        if (/adhesion|adhesi[oó]n|pss|plan de seguridad|aprobacion.*pss/.test(t)) return 0;
+        if (/contrato|alta.*ss|alta.*seguridad social|tgss|rnt|rlc|itc|reta/.test(t)) return 1;
+        return 2;
+      };
+      documentos.sort((a, b) => prioridadEmpresa(a) - prioridadEmpresa(b));
+      const numAnclas = documentos.filter((d) => prioridadEmpresa(d) <= 1).length;
+
       const driveId = process.env["KAPPA_DRIVE_ID"] || "";
 
       // Resolver ruta base del pedido en KAPPA: {cliente}/{26-XXXX}/{item}/Trabajo/03 CSS
@@ -111,7 +129,7 @@ df.app.activity("prepararPack", {
       }
 
       await supa.update("caes_pack", `id=eq.${input.packId}`, { total_docs: documentos.length });
-      return { ok: true, instanciaId, documentos, catalogo, driveId, rutaBasePartes };
+      return { ok: true, instanciaId, documentos, catalogo, driveId, rutaBasePartes, numAnclas };
     } catch (e: any) {
       ctx.error(`prepararPack fallo: ${e?.message}`);
       return { ok: false, error: String(e?.message ?? e) };

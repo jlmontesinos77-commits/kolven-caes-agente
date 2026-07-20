@@ -33,23 +33,35 @@ const orchestrator: OrchestrationHandler = function* (ctx: OrchestrationContext)
   const total = prep.documentos.length;
   ctx.df.setCustomStatus({ fase: "clasificando", pack: packId, total, generados: 0 });
 
-  // 3) Fan-out POR LOTES: procesar de LOTE en LOTE evita saturar Graph con
-  //    cientos de creaciones de carpeta en paralelo (throttling 429).
+  // 3) Fan-out POR LOTES en DOS FASES (fase C):
+  //    Fase 1 = documentos "ancla" (apertura/adhesion/contrato) que definen las
+  //    empresas. Se completan antes de la fase 2, para que diplomas y docs sin
+  //    empresa se archiven bajo la empresa ya resuelta en una sola pasada.
+  //    Fase 2 = el resto.
   const LOTE = 8;
   const docs: any[] = prep.documentos;
+  const numAnclas: number = prep.numAnclas ?? 0;
   const resultados: any[] = [];
-  for (let i = 0; i < docs.length; i += LOTE) {
-    const grupo = docs.slice(i, i + LOTE);
-    const tareas = grupo.map((doc: any) =>
-      ctx.df.callActivity("clasificarUnDoc", {
-        origen, packId, instanciaId: prep.instanciaId,
-        driveId: prep.driveId, rutaBasePartes: prep.rutaBasePartes,
-        catalogo: prep.catalogo, doc,
-      })
-    );
-    const parcial: any[] = yield ctx.df.Task.all(tareas);
-    for (const r of parcial) resultados.push(r);
-    ctx.df.setCustomStatus({ fase: "clasificando", pack: packId, total: docs.length, procesados: resultados.length });
+
+  // Rangos de fase: [inicio, fin). Fase 1 anclas, fase 2 resto.
+  const fases: Array<[number, number]> = [];
+  if (numAnclas > 0) fases.push([0, numAnclas]);
+  fases.push([numAnclas, docs.length]);
+
+  for (const [desde, hasta] of fases) {
+    for (let i = desde; i < hasta; i += LOTE) {
+      const grupo = docs.slice(i, Math.min(i + LOTE, hasta));
+      const tareas = grupo.map((doc: any) =>
+        ctx.df.callActivity("clasificarUnDoc", {
+          origen, packId, instanciaId: prep.instanciaId,
+          driveId: prep.driveId, rutaBasePartes: prep.rutaBasePartes,
+          catalogo: prep.catalogo, doc,
+        })
+      );
+      const parcial: any[] = yield ctx.df.Task.all(tareas);
+      for (const r of parcial) resultados.push(r);
+      ctx.df.setCustomStatus({ fase: "clasificando", pack: packId, total: docs.length, procesados: resultados.length });
+    }
   }
 
   // 4) Agregar
