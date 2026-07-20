@@ -94,19 +94,22 @@ export async function clasificarDocumento(
     let trabajadorNombreCanonico: string | null = null;
 
     // Filtro determinista de PROVEEDORES: nombres de academias, mutuas, centros
-    // medicos y servicios de prevencion NO son la empresa titular del trabajador.
-    // Si ademas el doc es de formacion/salud/epi y no trae CIF de empresa, el
-    // nombre que sale es casi seguro el del proveedor -> lo descartamos.
+    // medicos y servicios de prevencion NO son la empresa titular del trabajador,
+    // AUNQUE traigan CIF (un SPA/mutua tiene CIF pero no es la contrata). Si ademas
+    // el doc es de formacion/salud/epi y no trae CIF de empresa, tambien se descarta.
     const nombreEmpresaIA = (cls.empresa_nombre || "").trim();
-    const esProveedor = /\b(PREVENCION|PREVENCIÓN|SERVICIO DE PREVENCION|SPA|MUTUA|FREMAP|ASEPEYO|QUIRON|QUIRÓN|UNIÓN DE MUTUAS|UMIVALE|CENTRO M[EÉ]DICO|CENTRO DE FORMACION|CENTRO DE FORMACIÓN|ACADEMIA|FORMACION|FORMACIÓN|DICONSAL|IGS)\b/i.test(nombreEmpresaIA);
+    const esProveedor = /\b(PREVENCION|PREVENCIÓN|SERVICIO DE PREVENCION|SPA|MUTUA|FREMAP|ASEPEYO|QUIRON|QUIRÓN|UNIÓN DE MUTUAS|UMIVALE|CENTRO M[EÉ]DICO|CENTRO DE FORMACION|CENTRO DE FORMACIÓN|ACADEMIA|FORMACION|FORMACIÓN|DICONSAL|IGS|SALUD LABORAL|GESTIONES PREVENTIVAS|VIGILANCIA DE LA SALUD)\b/i.test(nombreEmpresaIA);
     const catNoEmpresa = tipoInfo?.categoria === "formacion" || tipoInfo?.categoria === "salud" || tipoInfo?.categoria === "epi";
-    const nombreEmpresaFiable = nombreEmpresaIA && !esProveedor && !(catNoEmpresa && !cls.empresa_cif)
-      ? nombreEmpresaIA : null;
+    // Proveedor -> descartar SIEMPRE (aunque tenga CIF). Sin CIF en doc de
+    // formacion/salud/epi -> descartar tambien.
+    const descartarEmpresa = esProveedor || (catNoEmpresa && !cls.empresa_cif);
+    const nombreEmpresaFiable = nombreEmpresaIA && !descartarEmpresa ? nombreEmpresaIA : null;
+    const cifFiable = descartarEmpresa ? null : cls.empresa_cif;
 
-    if (cls.empresa_cif || nombreEmpresaFiable) {
+    if (cifFiable || nombreEmpresaFiable) {
       empresaId = await ctx.supa.rpc<string>("caes_resolver_empresa", {
         p_instancia: ctx.instanciaId,
-        p_cif: cls.empresa_cif,
+        p_cif: cifFiable,
         p_nombre: nombreEmpresaFiable,
         p_rol: "subcontrata",
       });
