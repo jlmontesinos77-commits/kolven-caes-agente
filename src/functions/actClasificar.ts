@@ -66,9 +66,9 @@ df.app.activity("clasificarUnDoc", {
         instanciaId, packId, driveId, rutaBasePartes, claveToId,
       };
 
-      // Pasar pista de empresa (nombre de zips contenedores) al nombre para ayudar a la IA
-      const nombreConPista = doc.pista ? `${doc.nombre} [origen: ${doc.pista}]` : doc.nombre;
-      const res = await clasificarDocumento(ctxDoc, nombreConPista, contenido);
+      // El nombre fisico que se archiva es doc.nombre LIMPIO; la pista va aparte,
+      // solo para ayudar a la IA (no contamina el nombre del fichero en SharePoint).
+      const res = await clasificarDocumento(ctxDoc, doc.nombre, contenido, doc.pista);
 
       try {
         const packs = await supa.select<any>("caes_pack", `id=eq.${packId}&select=procesados`);
