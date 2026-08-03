@@ -39,7 +39,7 @@ export const CFG = {
   visionMaxMb: () => Number(env("CAES_VISION_MAX_MB", false) || "28"),
   // Umbral de confianza por debajo del cual una clasificación por TEXTO se reintenta
   // con VISIÓN (para escaneos con capa de texto OCR basura). 0 = desactiva la escalada.
-  visionEscalaConf: () => { const v = Number(env("CAES_VISION_ESCALA_CONF", false)); return (isNaN(v) ? 0.72 : v); },
+  visionEscalaConf: () => { const raw = env("CAES_VISION_ESCALA_CONF", false); if (!raw) return 0.72; const v = Number(raw); return isNaN(v) ? 0.72 : v; },
   docIntelEndpoint: () => env("DOCINTEL_ENDPOINT"),
   docIntelKey: () => env("DOCINTEL_KEY"),
   blobConn: () => env("CAES_BLOB_CONN"),

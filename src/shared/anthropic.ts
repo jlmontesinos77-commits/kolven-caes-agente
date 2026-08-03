@@ -50,17 +50,33 @@ export async function llamarModelo(
     messages: [{ role: "user", content }],
   };
 
-  const r = await fetchConTimeout("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": CFG.anthropicKey(),
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(body),
-  }, 180000);
-
-  if (!r.ok) throw new Error(`Anthropic fallo ${r.status}: ${await r.text()}`);
+  // Reintentos con backoff: 429 (rate limit), 529 (overloaded) y 5xx son transitorios.
+  // Sin esto, un pico de rate-limit tumbaba documentos enteros (fallos en masa).
+  const MAX_REINTENTOS = 5;
+  let r: Response | undefined;
+  let ultimoErr = "";
+  for (let intento = 0; intento <= MAX_REINTENTOS; intento++) {
+    r = await fetchConTimeout("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": CFG.anthropicKey(),
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    }, 180000);
+    if (r.ok) break;
+    const reintentable = r.status === 429 || r.status === 529 || (r.status >= 500 && r.status < 600);
+    ultimoErr = `Anthropic fallo ${r.status}: ${await r.text()}`;
+    if (!reintentable || intento === MAX_REINTENTOS) throw new Error(ultimoErr);
+    // Respeta Retry-After si viene; si no, backoff exponencial con jitter (máx 30s).
+    const ra = Number(r.headers.get("retry-after"));
+    const espera = (!isNaN(ra) && ra > 0)
+      ? Math.min(60000, ra * 1000)
+      : Math.min(30000, 1000 * Math.pow(2, intento)) + Math.floor(Math.random() * 750);
+    await new Promise((res) => setTimeout(res, espera));
+  }
+  if (!r || !r.ok) throw new Error(ultimoErr || "Anthropic sin respuesta");
   const j: any = await r.json();
 
   const texto = (j.content ?? [])
