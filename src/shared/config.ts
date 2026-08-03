@@ -37,6 +37,9 @@ export const CFG = {
   // al OCR clásico. Solo afecta a escaneos/fotos (los PDF nativos van por texto).
   visionOn: () => (env("CAES_VISION", false) || "on").toLowerCase() !== "off",
   visionMaxMb: () => Number(env("CAES_VISION_MAX_MB", false) || "28"),
+  // Umbral de confianza por debajo del cual una clasificación por TEXTO se reintenta
+  // con VISIÓN (para escaneos con capa de texto OCR basura). 0 = desactiva la escalada.
+  visionEscalaConf: () => { const v = Number(env("CAES_VISION_ESCALA_CONF", false)); return (isNaN(v) ? 0.72 : v); },
   docIntelEndpoint: () => env("DOCINTEL_ENDPOINT"),
   docIntelKey: () => env("DOCINTEL_KEY"),
   blobConn: () => env("CAES_BLOB_CONN"),

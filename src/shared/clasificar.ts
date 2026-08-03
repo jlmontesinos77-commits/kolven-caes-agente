@@ -132,7 +132,35 @@ export async function clasificarDocumento(
       1500,
       documento
     );
-    const cls = parseJsonTolerante<ClasificacionIA>(resp.texto);
+    let cls = parseJsonTolerante<ClasificacionIA>(resp.texto);
+    let uso = resp.uso;
+
+    // ESCALADO A VISIÓN (arreglo de raíz de las lecturas malas): si clasificamos por
+    // TEXTO y la confianza es baja —típico de PDFs escaneados con capa de texto OCR
+    // basura, que ensucia nombres/DNI—, reintentamos con VISIÓN, que lee el documento
+    // directamente. El coste extra recae SOLO en la minoría dudosa; los digitales
+    // limpios (confianza alta) no pagan segunda pasada.
+    const umbralEscala = CFG.visionEscalaConf();
+    const visionRescate = !modoVision && umbralEscala > 0 && CFG.visionOn() && !!mime &&
+      contenido.length <= CFG.visionMaxMb() * 1024 * 1024;
+    if (visionRescate && (cls.confidence ?? 0) < umbralEscala) {
+      try {
+        const docV: DocumentoVision = { base64: Buffer.from(contenido).toString("base64"), mime: mime! };
+        const respV = await llamarModelo(
+          ctx.system, construirUser(nombreParaIA, textoParaIA, true), 1500, docV,
+        );
+        const clsV = parseJsonTolerante<ClasificacionIA>(respV.texto);
+        // sumar el coste de las dos llamadas
+        uso = {
+          input: uso.input + respV.uso.input,
+          output: uso.output + respV.uso.output,
+          cacheCreate: uso.cacheCreate + respV.uso.cacheCreate,
+          cacheRead: uso.cacheRead + respV.uso.cacheRead,
+        };
+        // nos quedamos con la lectura de visión si no empeora la confianza
+        if ((clsV.confidence ?? 0) >= (cls.confidence ?? 0)) { cls = clsV; }
+      } catch { /* si la visión falla, seguimos con la lectura por texto */ }
+    }
 
     // 3) Resolver tipo contra catalogo
     const tipoInfo = cls.clave_doc_tipo ? ctx.claveToId.get(cls.clave_doc_tipo) : undefined;
@@ -296,7 +324,7 @@ export async function clasificarDocumento(
       archivo, ok: true, doc_id: docId, sharepoint_url: webUrl,
       clave: cls.clave_doc_tipo,
       confidence: cls.confidence ?? 0,
-      revision, estado, uso: resp.uso,
+      revision, estado, uso,
     };
   } catch (e: any) {
     return { archivo, ok: false, clave: null, confidence: 0, revision: true, estado: null, error: String(e?.message ?? e) };
