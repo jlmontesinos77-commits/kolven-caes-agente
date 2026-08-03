@@ -162,18 +162,30 @@ export async function clasificarDocumento(
         empresaId = ctx.empresaFijada ?? null;
       }
     } else {
-      // --- MODO B: ZIP masivo. CASAR contra existentes. NUNCA crear empresa. ---
+      // --- MODO B: ZIP masivo. RESOLVER (casar-o-CREAR) consolidando por CIF/nombre. ---
       // Filtro de proveedores (mutuas/SPA/academias no son empresa titular).
       const nombreEmpresaIA = (cls.empresa_nombre || "").trim();
       const esProveedor = /\b(PREVENCION|PREVENCIÓN|SERVICIO DE PREVENCION|SPA|MUTUA|FREMAP|ASEPEYO|QUIRON|QUIRÓN|UNIÓN DE MUTUAS|UMIVALE|CENTRO M[EÉ]DICO|CENTRO DE FORMACION|CENTRO DE FORMACIÓN|ACADEMIA|FORMACION|FORMACIÓN|DICONSAL|IGS|SALUD LABORAL|GESTIONES PREVENTIVAS|VIGILANCIA DE LA SALUD)\b/i.test(nombreEmpresaIA);
       const cifFiable = esProveedor ? null : (cls.empresa_cif || null);
 
-      // Casar EMPRESA contra existentes (solo match, sin crear).
-      empresaId = await ctx.supa.rpc<string>("caes_casar_empresa", {
-        p_instancia: ctx.instanciaId,
-        p_cif: cifFiable,
-        p_nombre: esProveedor ? null : (nombreEmpresaIA || null),
-      });
+      // RAÍZ: resolver la empresa (casar-o-CREAR) consolidando por CIF y por nombre
+      // normalizado (la RPC cruza con el maestro de clientes y usa lock anti-duplicados).
+      // Antes solo casaba y NUNCA creaba, porque el OCR viejo generaba variantes
+      // fantasma del nombre (AZURE/PURE/RGURE por "ROURE"...). La visión lee el nombre
+      // y el CIF de forma fiable, así que ya se puede crear sin ensuciar: todas las
+      // variantes caen en la misma empresa. Los proveedores (mutuas/SPA/academias) y
+      // los documentos sin empresa titular legible siguen sin crear empresa
+      // (empresaId=null -> "sin asignar"), igual que antes.
+      if (esProveedor || (!nombreEmpresaIA && !cifFiable)) {
+        empresaId = null;
+      } else {
+        empresaId = await ctx.supa.rpc<string>("caes_resolver_empresa", {
+          p_instancia: ctx.instanciaId,
+          p_cif: cifFiable,
+          p_nombre: nombreEmpresaIA || null,
+          p_rol: "subcontrata",
+        });
+      }
 
       // Casar/crear TRABAJADOR por DNI (el DNI es fiable). Solo si su empresa caso.
       if (cls.trabajador_dni && empresaId) {
