@@ -6,7 +6,7 @@
     }
   },
   "extensions": {
-    "durableTask": { "hubName": "caesclasificador", "maxConcurrentActivityFunctions": 5 }
+    "durableTask": { "hubName": "caesclasificador", "maxConcurrentActivityFunctions": 2 }
   },
   "extensionBundle": {
     "id": "Microsoft.Azure.Functions.ExtensionBundle",

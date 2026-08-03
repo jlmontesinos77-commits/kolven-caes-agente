@@ -52,7 +52,7 @@ export async function llamarModelo(
 
   // Reintentos con backoff: 429 (rate limit), 529 (overloaded) y 5xx son transitorios.
   // Sin esto, un pico de rate-limit tumbaba documentos enteros (fallos en masa).
-  const MAX_REINTENTOS = 5;
+  const MAX_REINTENTOS = 8;
   let r: Response | undefined;
   let ultimoErr = "";
   for (let intento = 0; intento <= MAX_REINTENTOS; intento++) {
