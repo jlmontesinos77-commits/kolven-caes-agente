@@ -64,6 +64,11 @@ const orchestrator: OrchestrationHandler = function* (ctx: OrchestrationContext)
     }
   }
 
+  // 3b) RECONCILIACIÓN: re-enganchar los "sin asignar" por el DNI/CIF ya leído,
+  //     ahora que todas las empresas/trabajadores del lote existen.
+  ctx.df.setCustomStatus({ fase: "reconciliando", pack: packId });
+  yield ctx.df.callActivity("reconciliarSinAsignar", { origen, instanciaId: prep.instanciaId });
+
   // 4) Agregar
   const okCount = resultados.filter((r) => r.ok).length;
   const fallidos = resultados.filter((r) => !r.ok).length;
