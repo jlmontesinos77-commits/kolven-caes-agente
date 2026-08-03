@@ -7,10 +7,11 @@ import * as df from "durable-functions";
 import { InvocationContext } from "@azure/functions";
 import JSZip from "jszip";
 import { Supa } from "../shared/supa";
-import { tenantConfig } from "../shared/config";
+import { tenantConfig, CFG } from "../shared/config";
 import { descargarBlob } from "../shared/blob";
 import { construirSystem, DocTipoCatalogo } from "../shared/prompt";
 import { clasificarDocumento, CtxDoc } from "../shared/clasificar";
+import { registrarCosteCaes } from "../shared/coste";
 
 const zipCache = new Map<string, JSZip>();
 function cacheGuard() { if (zipCache.size > 6) { const k = zipCache.keys().next().value; if (k) zipCache.delete(k); } }
@@ -69,6 +70,21 @@ df.app.activity("clasificarUnDoc", {
       // El nombre fisico que se archiva es doc.nombre LIMPIO; la pista va aparte,
       // solo para ayudar a la IA (no contamina el nombre del fichero en SharePoint).
       const res = await clasificarDocumento(ctxDoc, doc.nombre, contenido, doc.pista);
+
+      // Registrar el coste de IA. Solo si hubo llamada a Claude (res.uso presente);
+      // los documentos con texto vacío se archivan sin invocar al modelo.
+      if (res.uso) {
+        await registrarCosteCaes(supa, tenantConfig(origen), {
+          modelo: CFG.anthropicModel(),
+          uso: res.uso,
+          concepto: `Clasificación PRL/CAE · ${doc.nombre}`,
+          instanciaId,
+          packId,
+          orgId: input.orgId ?? null,
+          servicioId: input.servicioId ?? null,
+          meta: { archivo: doc.nombre, clave: res.clave, confidence: res.confidence, origen },
+        });
+      }
 
       try {
         const packs = await supa.select<any>("caes_pack", `id=eq.${packId}&select=procesados`);
