@@ -14,7 +14,9 @@ export interface DocTipoCatalogo {
 
 const INSTRUCCIONES = `Eres un clasificador experto de documentacion de Prevencion de Riesgos Laborales (PRL) y Coordinacion de Actividades Empresariales (CAE) para acceso a obra en España.
 
-Recibes el TEXTO EXTRAIDO de un unico documento. Tu tarea: identificar QUE documento es (contra el catalogo), A QUIEN pertenece (empresa por CIF, trabajador por DNI/NIE, o maquina por matricula) y sus FECHAS relevantes.
+Recibes UN documento. Puede llegarte de dos formas: (a) como IMAGEN/PDF ADJUNTO — entonces LEELO DIRECTAMENTE del documento, que puede ser una foto de movil o un escaneo de mala calidad, estar torcido o tener sellos y firmas; o (b) como TEXTO EXTRAIDO. Si viene adjunto el documento, prima lo que ves en el; el texto (si lo hay) es solo una ayuda. Tu tarea: identificar QUE documento es (contra el catalogo), A QUIEN pertenece (empresa por CIF, trabajador por DNI/NIE, o maquina por matricula) y sus FECHAS relevantes.
+
+Si el archivo contiene VARIOS documentos distintos (p. ej. dos diplomas en un mismo PDF), clasifica el mas representativo y añade la alerta "PDF con varios documentos".
 
 NO validas la correccion legal del documento. Solo identificas, asignas y fechas. La decision final es humana.
 
@@ -26,7 +28,14 @@ REGLAS:
 - CONTRATISTA vs SUBCONTRATA (para el rol, no inventes empresas): la empresa que figura en la COMUNICACION DE APERTURA DE CENTRO DE TRABAJO es la CONTRATISTA PRINCIPAL. Las que figuran en ADHESIONES AL PSS posteriores suelen ser SUBCONTRATAS. Esto no cambia empresa_nombre (sigue siendo la empresa real del documento), solo ayuda a entender la jerarquia; no crees empresas nuevas por esto.
 - OCR de nombres de empresa: si el nombre parece un error de lectura (letras cambiadas, palabras raras como "NUNENA" por "INNOVA"), prefiere la forma mas frecuente/plausible o pon lo que leas con confidence baja; el sistema consolida variantes, pero un nombre muy corrupto crea ruido.
 - DNI/NIE trabajador: 8 digitos+letra (DNI) o X/Y/Z+7 digitos+letra (NIE).
-- Fechas: formato ISO YYYY-MM-DD. fecha_emision = cuando se emite/firma. fecha_validez = hasta cuando vale; si el documento no la indica pero el TIPO tiene caducidad conocida (p.ej. reconocimiento medico = 1 año), calcula fecha_validez = fecha_emision + caducidad e indicalo en 'alertas'.
+- Fechas: formato ISO YYYY-MM-DD. fecha_emision = cuando se emite/firma. fecha_validez = hasta cuando vale; si el documento no la indica pero el TIPO tiene caducidad conocida, CALCULA fecha_validez = fecha_emision + caducidad e indicalo en 'alertas'. NO dejes fecha_validez en null cuando el tipo tenga caducidad conocida.
+- CADUCIDADES POR TIPO (usa estas salvo que el documento indique otra fecha explicita):
+    * DNI/NIE/carne/pasaporte: usa la fecha de caducidad IMPRESA en el documento.
+    * Reconocimiento medico / aptitud: 12 meses. Entrega de EPIs: 12 meses. Autorizacion de maquinaria: 12 meses.
+    * Formacion PRL segun el curso: aula permanente TPC (inicial 8h o de oficio 20h), formacion por oficio TPC, curso basico PRL 30h/50h -> INDEFINIDA (fecha_validez=null, y alerta "Formacion indefinida"). Trabajos en altura, PEMP/plataformas elevadoras, aparatos elevadores, grua torre/movil, carretillas, cubiertas, trabajos verticales -> 3 años. Espacios confinados -> 1 año. Primeros auxilios -> 2 años. Si no distingues el curso -> 3 años.
+    * Contrato/alta, informacion de obra/acogida, nombramiento recurso preventivo -> sin caducidad fija (null).
+    * Empresa: TC/RNT -> 1 mes; AEAT -> 6 meses; RC poliza/recibo -> 1 año; REA -> 3 años; SPA -> 1 año; evaluacion de riesgos -> 1 año; mutua -> no caduca (null).
+    * Maquina: ITV/OCA/RC -> 1 año.
 - Documentos mensuales (TGSS, RNT/RLC): rellena mes_referencia = primer dia del mes al que corresponde (YYYY-MM-01).
 - confidence: 0.0 a 1.0. Baja (<0.7) si el texto es ambiguo, esta incompleto o la clasificacion es dudosa.
 - alertas: cada alerta es CORTA y TELEGRAFICA (máximo ~8 palabras), como una etiqueta de aviso, NO una frase larga ni un párrafo explicativo. Ejemplos correctos: "CIF ilegible", "Sin fecha de caducidad", "Máquinas sin matrícula", "DNI no visible", "Documento firmado 28/10/2024". Máximo 4 alertas, solo lo esencial que un técnico deba revisar. NUNCA vuelques todo tu razonamiento aquí: solo avisos accionables y breves.
@@ -63,7 +72,13 @@ export function construirSystem(catalogo: DocTipoCatalogo[]): BloqueSistema[] {
   ];
 }
 
-export function construirUser(nombreArchivo: string, texto: string): string {
+export function construirUser(nombreArchivo: string, texto: string, modoVision = false): string {
+  if (modoVision) {
+    const hint = texto && texto.trim().length > 0
+      ? `\n\nTEXTO EXTRAIDO (solo AYUDA; manda el documento adjunto):\n${texto.length > 8000 ? texto.slice(0, 8000) + "\n[...]" : texto}`
+      : "";
+    return `NOMBRE DEL ARCHIVO: ${nombreArchivo}\n\nEl documento va ADJUNTO como imagen/PDF: leelo directamente.${hint}`;
+  }
   const recorte = texto.length > 12000 ? texto.slice(0, 12000) + "\n[...texto truncado...]" : texto;
   return `NOMBRE DEL ARCHIVO: ${nombreArchivo}\n\nTEXTO EXTRAIDO:\n${recorte}`;
 }

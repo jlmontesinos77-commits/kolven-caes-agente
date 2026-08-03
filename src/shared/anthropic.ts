@@ -20,16 +20,34 @@ export interface RespuestaIA {
   uso: UsoTokens;
 }
 
+// Documento para clasificación por VISIÓN (Claude lee el PDF/imagen directamente,
+// sin OCR intermedio). base64 del fichero + su media_type.
+export interface DocumentoVision {
+  base64: string;
+  mime: string; // application/pdf | image/png | image/jpeg | image/webp | image/gif
+}
+
 export async function llamarModelo(
   system: BloqueSistema[],
   userContent: string,
-  maxTokens = 1500
+  maxTokens = 1500,
+  documento?: DocumentoVision | null
 ): Promise<RespuestaIA> {
+  // Si hay documento, se envía como bloque de visión + el texto; si no, texto solo.
+  let content: any = userContent;
+  if (documento && documento.base64) {
+    const esPdf = documento.mime === "application/pdf";
+    const bloqueDoc = esPdf
+      ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: documento.base64 } }
+      : { type: "image", source: { type: "base64", media_type: documento.mime, data: documento.base64 } };
+    content = [bloqueDoc, { type: "text", text: userContent }];
+  }
+
   const body = {
     model: CFG.anthropicModel(),
     max_tokens: maxTokens,
     system,
-    messages: [{ role: "user", content: userContent }],
+    messages: [{ role: "user", content }],
   };
 
   const r = await fetchConTimeout("https://api.anthropic.com/v1/messages", {

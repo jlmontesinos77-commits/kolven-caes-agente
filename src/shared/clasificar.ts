@@ -3,10 +3,11 @@
 // falla no tumba el lote.
 
 import { Supa } from "./supa";
-import { extraerTexto } from "./texto";
-import { llamarModelo, parseJsonTolerante, UsoTokens } from "./anthropic";
+import { extraerTexto, extraerTextoNativo } from "./texto";
+import { llamarModelo, parseJsonTolerante, UsoTokens, DocumentoVision } from "./anthropic";
 import { BloqueSistema } from "./anthropic";
 import { construirUser } from "./prompt";
+import { CFG } from "./config";
 import { subirArchivo } from "./graph";
 import { rutaDentroCss } from "./rutasCae";
 
@@ -40,6 +41,18 @@ export interface ResultadoDoc {
 }
 
 const UMBRAL_REVISION = 0.7;
+
+// media_type de visión soportado por el modelo según extensión. tiff u otros -> null
+// (esos van por OCR clásico). PDF se envía como bloque "document".
+function mimeVision(nombre: string): string | null {
+  const n = nombre.toLowerCase();
+  if (n.endsWith(".pdf")) return "application/pdf";
+  if (n.endsWith(".png")) return "image/png";
+  if (n.endsWith(".jpg") || n.endsWith(".jpeg")) return "image/jpeg";
+  if (n.endsWith(".webp")) return "image/webp";
+  if (n.endsWith(".gif")) return "image/gif";
+  return null;
+}
 
 // Calcula el estado del prl_documento a partir de la fecha de validez
 function calcularEstado(fechaValidez: string | null, avisoDias = 30): string {
@@ -79,16 +92,46 @@ export async function clasificarDocumento(
   pista?: string | null
 ): Promise<ResultadoDoc> {
   try {
-    // 1) Extraer texto (nativo o OCR)
-    const { texto } = await extraerTexto(contenido, archivo);
-    if (!texto || texto.trim().length < 10) {
-      return await guardarSinClasificar(ctx, archivo, contenido, "texto vacio o ilegible");
+    // 1) Elegir vía de lectura minimizando coste:
+    //    - PDF con capa de texto (nativo, GRATIS)        -> clasificar por TEXTO.
+    //    - Escaneo / foto / imagen (antes OCR de pago)   -> VISIÓN (Claude lee el doc).
+    //    - Formato no soportado por visión (tiff) u OFF  -> OCR clásico (fallback).
+    const mime = mimeVision(archivo);
+    const visionPosible = CFG.visionOn() && !!mime &&
+      contenido.length <= CFG.visionMaxMb() * 1024 * 1024;
+
+    let documento: DocumentoVision | null = null;
+    let textoParaIA = "";
+    let modoVision = false;
+
+    const nativo = await extraerTextoNativo(contenido, archivo).catch(() => null);
+
+    if (nativo && nativo.suficiente) {
+      // PDF digital: texto nativo suficiente -> clasificación por texto (sin coste de visión/OCR).
+      textoParaIA = nativo.texto;
+    } else if (visionPosible) {
+      // Escaneado/foto/imagen -> VISIÓN. Sustituye al OCR de pago y lee mucho mejor.
+      documento = { base64: Buffer.from(contenido).toString("base64"), mime: mime! };
+      textoParaIA = nativo?.texto ?? "";
+      modoVision = true;
+    } else {
+      // Fallback: OCR clásico (formatos no-visión como tiff, o CAES_VISION=off).
+      const { texto } = await extraerTexto(contenido, archivo);
+      if (!texto || texto.trim().length < 10) {
+        return await guardarSinClasificar(ctx, archivo, contenido, "texto vacio o ilegible");
+      }
+      textoParaIA = texto;
     }
 
     // 2) Clasificar con IA. La pista (nombre de zips contenedores) ayuda a la IA
     //    a inferir la empresa, pero NO forma parte del nombre fisico del archivo.
     const nombreParaIA = pista ? `${archivo} [origen: ${pista}]` : archivo;
-    const resp = await llamarModelo(ctx.system, construirUser(nombreParaIA, texto));
+    const resp = await llamarModelo(
+      ctx.system,
+      construirUser(nombreParaIA, textoParaIA, modoVision),
+      1500,
+      documento
+    );
     const cls = parseJsonTolerante<ClasificacionIA>(resp.texto);
 
     // 3) Resolver tipo contra catalogo

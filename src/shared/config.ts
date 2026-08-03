@@ -33,6 +33,10 @@ export const CFG = {
   agenteSecret: () => env("AGENTE_SECRET"),
   anthropicKey: () => env("ANTHROPIC_API_KEY"),
   anthropicModel: () => env("ANTHROPIC_MODEL", false) || "claude-sonnet-4-6",
+  // Clasificación por VISIÓN: activa por defecto; poner CAES_VISION=off para volver
+  // al OCR clásico. Solo afecta a escaneos/fotos (los PDF nativos van por texto).
+  visionOn: () => (env("CAES_VISION", false) || "on").toLowerCase() !== "off",
+  visionMaxMb: () => Number(env("CAES_VISION_MAX_MB", false) || "28"),
   docIntelEndpoint: () => env("DOCINTEL_ENDPOINT"),
   docIntelKey: () => env("DOCINTEL_KEY"),
   blobConn: () => env("CAES_BLOB_CONN"),

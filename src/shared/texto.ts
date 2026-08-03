@@ -69,6 +69,20 @@ async function ocrAzure(buf: Uint8Array, contentType: string): Promise<{ texto: 
   throw new Error("DocIntel: timeout de polling (>60s)");
 }
 
+// Texto NATIVO solamente (unpdf, GRATIS). NO hace OCR de pago.
+// Devuelve null si no es PDF o no tiene capa de texto. 'suficiente' indica si
+// hay bastante texto por página como para clasificar sin visión/OCR.
+export async function extraerTextoNativo(
+  buf: Uint8Array,
+  nombre: string
+): Promise<{ texto: string; paginas: number; suficiente: boolean } | null> {
+  if (!nombre.toLowerCase().endsWith(".pdf")) return null;
+  const nativo = await extraerNativo(buf);
+  if (!nativo) return null;
+  const charsPorPag = nativo.paginas > 0 ? nativo.texto.length / nativo.paginas : nativo.texto.length;
+  return { texto: nativo.texto, paginas: nativo.paginas, suficiente: charsPorPag >= MIN_CHARS_NATIVO };
+}
+
 // Entrada principal: decide nativo vs OCR
 export async function extraerTexto(bufOrig: Uint8Array, nombre: string): Promise<TextoExtraido> {
   // Copia aislada: el buffer puede venir de una entrada de ZIP compartida/cacheada.
