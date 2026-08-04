@@ -92,23 +92,33 @@ df.app.activity("prepararPack", {
         `activo=eq.true&select=clave,ambito,categoria,nombre,aviso_dias_antes&order=orden.asc`
       );
 
-      // FASE C: ordenar para que los documentos que DEFINEN empresas se procesen
-      // primero (apertura de centro de trabajo = contratista; adhesiones al PSS =
-      // subcontratas; contratos/altas SS). Asi, cuando llega un diploma o un doc
-      // sin empresa clara, la empresa titular del trabajador ya esta resuelta y el
-      // documento se archiva bajo la carpeta correcta en una sola pasada.
+      // ENFOQUE ESCALONADO (organizar antes de mezclar): se procesa en 3 fases, en
+      // orden de dependencia, para no clasificar acreditaciones sueltas antes de
+      // tener a quien pertenecen.
+      //   Fase 1 EMPRESAS  : apertura de centro de trabajo, adhesiones al PSS, REA,
+      //                      libro de subcontratacion -> crean/consolidan empresas.
+      //   Fase 2 CENSO     : ITA/relacion de trabajadores, TC2/RNT, contratos y altas
+      //                      SS, fichas de maquina -> materializan trabajadores/maquinas.
+      //   Fase 3 ACREDITAC.: diplomas, EPIs, medicos, autorizaciones, ITV/OCA... ->
+      //                      casan por DNI/matricula/CIF contra el censo ya construido.
       // La deteccion es por nombre de archivo/pista (aun no conocemos el tipo real,
-      // que lo decide la IA); es una heuristica de ordenacion, no de clasificacion.
-      const prioridadEmpresa = (doc: any): number => {
+      // que lo decide la IA); es una heuristica de ORDENACION, no de clasificacion.
+      const fase = (doc: any): number => {
         const t = `${doc.nombre || ""} ${doc.pista || ""}`.toLowerCase();
-        // 0 = maxima prioridad (define empresa), 2 = normal
-        if (/apertura|centro de trabajo|comunicacion.*apertura|ar_apertura/.test(t)) return 0;
-        if (/adhesion|adhesi[oó]n|pss|plan de seguridad|aprobacion.*pss/.test(t)) return 0;
-        if (/contrato|alta.*ss|alta.*seguridad social|tgss|rnt|rlc|itc|reta/.test(t)) return 1;
-        return 2;
+        // Fase 1: documentos que DEFINEN empresa
+        if (/apertura|centro de trabajo|comunicacion.*apertura|ar_apertura/.test(t)) return 1;
+        if (/adhesion|adhesi[oó]n|\bpss\b|plan de seguridad|aprobacion.*pss/.test(t)) return 1;
+        if (/\brea\b|libro.*subcontrat|subcontrataci[oó]n/.test(t)) return 1;
+        // Fase 2: documentos que DEFINEN el censo (trabajadores/maquinas)
+        if (/\bita\b|relacion.*trabajador|relaci[oó]n.*personal|listado.*personal|censo/.test(t)) return 2;
+        if (/\btc-?2\b|\brnt\b|\brlc\b|tgss|seguridad social|contrato|\balta\b/.test(t)) return 2;
+        if (/ficha.*tecnica|ficha.*t[eé]cnica|permiso.*circulacion|matricula|matr[ií]cula|marcado.*ce/.test(t)) return 2;
+        // Fase 3: el resto (acreditaciones)
+        return 3;
       };
-      documentos.sort((a, b) => prioridadEmpresa(a) - prioridadEmpresa(b));
-      const numAnclas = documentos.filter((d) => prioridadEmpresa(d) <= 1).length;
+      documentos.sort((a, b) => fase(a) - fase(b));
+      const numFase1 = documentos.filter((d) => fase(d) === 1).length;
+      const numFase2 = documentos.filter((d) => fase(d) === 2).length;
 
       const driveId = process.env["KAPPA_DRIVE_ID"] || "";
 
@@ -129,7 +139,7 @@ df.app.activity("prepararPack", {
       }
 
       await supa.update("caes_pack", `id=eq.${input.packId}`, { total_docs: documentos.length });
-      return { ok: true, instanciaId, documentos, catalogo, driveId, rutaBasePartes, numAnclas };
+      return { ok: true, instanciaId, documentos, catalogo, driveId, rutaBasePartes, numFase1, numFase2 };
     } catch (e: any) {
       ctx.error(`prepararPack fallo: ${e?.message}`);
       return { ok: false, error: String(e?.message ?? e) };

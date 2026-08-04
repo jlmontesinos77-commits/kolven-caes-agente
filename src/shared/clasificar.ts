@@ -6,7 +6,7 @@ import { Supa } from "./supa";
 import { extraerTexto, extraerTextoNativo } from "./texto";
 import { llamarModelo, parseJsonTolerante, UsoTokens, DocumentoVision } from "./anthropic";
 import { BloqueSistema } from "./anthropic";
-import { construirUser } from "./prompt";
+import { construirUser, construirSystemRoster, construirUserRoster } from "./prompt";
 import { CFG } from "./config";
 import { subirArchivo } from "./graph";
 import { rutaDentroCss } from "./rutasCae";
@@ -41,6 +41,52 @@ export interface ResultadoDoc {
 }
 
 const UMBRAL_REVISION = 0.7;
+
+// Documentos que LISTAN varios trabajadores de una empresa (censo). De estos se
+// extrae el roster completo para dar de alta a toda la plantilla de una vez.
+const ROSTER_CLAVES = new Set<string>(["empresa.ita_trabajadores", "empresa.tc_rnt"]);
+
+// Extrae el censo completo de trabajadores de una ITA/relación y los da de alta
+// bajo la empresa ya resuelta (casar-o-crear por DNI). Devuelve cuántos procesó y
+// el coste de IA. Best-effort: una fila o un fallo de parseo no rompe nada.
+async function materializarRoster(
+  ctx: CtxDoc,
+  empresaId: string,
+  archivo: string,
+  textoParaIA: string,
+  documento: DocumentoVision | null
+): Promise<{ creados: number; total: number; uso: UsoTokens }> {
+  const respR = await llamarModelo(
+    construirSystemRoster(),
+    construirUserRoster(archivo, textoParaIA, !!documento),
+    4000,
+    documento
+  );
+  let creados = 0;
+  let total = 0;
+  try {
+    const parsed = parseJsonTolerante<{
+      trabajadores?: Array<{ dni: string | null; nombre: string | null; apellidos: string | null }>;
+    }>(respR.texto);
+    const lista = Array.isArray(parsed.trabajadores) ? parsed.trabajadores : [];
+    for (const t of lista) {
+      const dni = (t.dni || "").trim() || null;
+      if (!dni) continue; // sin DNI no sirve como ancla de acreditaciones
+      total++;
+      try {
+        await ctx.supa.rpc<string>("caes_resolver_trabajador", {
+          p_instancia: ctx.instanciaId,
+          p_empresa: empresaId,
+          p_dni: dni,
+          p_nombre: (t.nombre || "").trim() || null,
+          p_apellidos: (t.apellidos || "").trim() || null,
+        });
+        creados++;
+      } catch { /* una fila que falla no tumba el censo */ }
+    }
+  } catch { /* si no parsea, seguimos: el doc se clasifica igual */ }
+  return { creados, total, uso: respR.uso };
+}
 
 // media_type de visión soportado por el modelo según extensión. tiff u otros -> null
 // (esos van por OCR clásico). PDF se envía como bloque "document".
@@ -213,6 +259,25 @@ export async function clasificarDocumento(
           p_nombre: nombreEmpresaIA || null,
           p_rol: "subcontrata",
         });
+      }
+
+      // ROSTER (RAÍZ del "sin asignar"): si el documento es una ITA/relación de
+      // trabajadores o un RNT, LISTA a toda la plantilla. En cuanto la empresa casa,
+      // damos de alta a TODO el censo de golpe. Así, cuando después llegan diplomas,
+      // EPIs o reconocimientos médicos SIN nombre de empresa, su DNI ya casa con un
+      // trabajador existente en vez de quedar "sin asignar". Esta es la fase 2 del
+      // enfoque escalonado: primero empresas, luego el censo, luego acreditaciones.
+      if (CFG.rosterOn() && empresaId && cls.clave_doc_tipo && ROSTER_CLAVES.has(cls.clave_doc_tipo)) {
+        try {
+          const r = await materializarRoster(ctx, empresaId, archivo, textoParaIA, documento);
+          uso = {
+            input: uso.input + r.uso.input,
+            output: uso.output + r.uso.output,
+            cacheCreate: uso.cacheCreate + r.uso.cacheCreate,
+            cacheRead: uso.cacheRead + r.uso.cacheRead,
+          };
+          if (r.total > 0) (cls.alertas ??= []).push(`Censo: ${r.creados}/${r.total} trabajadores dados de alta`);
+        } catch { /* el roster es un extra; si falla, el doc se clasifica igual */ }
       }
 
       // Casar/crear TRABAJADOR por DNI (el DNI es fiable). Solo si su empresa caso.

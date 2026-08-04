@@ -72,6 +72,48 @@ export function construirSystem(catalogo: DocTipoCatalogo[]): BloqueSistema[] {
   ];
 }
 
+// --- EXTRACCIÓN DE ROSTER (censo de trabajadores) ---
+// Para documentos tipo ITA / Relación de trabajadores / TC2 / RNT que LISTAN a
+// varios trabajadores de una empresa. En vez de clasificar un solo titular,
+// extraemos la lista COMPLETA para dar de alta a todo el censo de una vez. Así,
+// cuando luego llegan diplomas/EPIs sin nombre de empresa, su DNI ya casa con un
+// trabajador existente (en vez de quedar "sin asignar").
+const INSTRUCCIONES_ROSTER = `Eres un extractor de censos de trabajadores en documentacion laboral española (ITA/relacion de trabajadores adscritos a una obra, TC2, RNT/RLC, listados de personal).
+
+Recibes UN documento (imagen/PDF adjunto o texto extraido) que LISTA varios trabajadores. Tu unica tarea: devolver la lista COMPLETA de personas fisicas (trabajadores) que aparecen, con su identificador y nombre.
+
+REGLAS:
+- Incluye a TODOS los trabajadores del listado, sin omitir filas. Si hay muchas paginas o filas, extraelas todas.
+- DNI/NIE: 8 digitos+letra (DNI) o X/Y/Z+7 digitos+letra (NIE). Normaliza sin espacios ni guiones. Si una fila no tiene DNI/NIE legible, incluyela igual con dni=null (usaremos el nombre).
+- Separa apellidos y nombre cuando puedas ("APELLIDO1 APELLIDO2, NOMBRE"). Si no puedes separarlos con seguridad, pon todo en 'apellidos' y nombre=null.
+- NO incluyas a la empresa, ni firmantes, ni tecnicos de prevencion, ni representantes que no sean trabajadores del censo. Solo el personal listado.
+- Si el documento NO es realmente un listado de varios trabajadores (es de un solo titular o no lista personas), devuelve trabajadores=[].
+- empresa_cif / empresa_nombre: el de la empresa TITULAR del censo (la contratista/subcontrata cuyos trabajadores se listan), si aparece con claridad; si no, null.
+
+Responde SOLO con un objeto JSON, sin texto alrededor:
+{
+  "empresa_cif": "B12345678" | null,
+  "empresa_nombre": "..." | null,
+  "trabajadores": [
+    { "dni": "12345678Z" | null, "nombre": "..." | null, "apellidos": "..." | null }
+  ]
+}`;
+
+export function construirSystemRoster(): BloqueSistema[] {
+  return [{ type: "text", text: INSTRUCCIONES_ROSTER }];
+}
+
+export function construirUserRoster(nombreArchivo: string, texto: string, modoVision = false): string {
+  if (modoVision) {
+    const hint = texto && texto.trim().length > 0
+      ? `\n\nTEXTO EXTRAIDO (solo AYUDA; manda el documento adjunto):\n${texto.length > 12000 ? texto.slice(0, 12000) + "\n[...]" : texto}`
+      : "";
+    return `NOMBRE DEL ARCHIVO: ${nombreArchivo}\n\nEl documento va ADJUNTO: leelo directamente y extrae TODOS los trabajadores del listado.${hint}`;
+  }
+  const recorte = texto.length > 16000 ? texto.slice(0, 16000) + "\n[...texto truncado...]" : texto;
+  return `NOMBRE DEL ARCHIVO: ${nombreArchivo}\n\nTEXTO EXTRAIDO:\n${recorte}`;
+}
+
 export function construirUser(nombreArchivo: string, texto: string, modoVision = false): string {
   if (modoVision) {
     const hint = texto && texto.trim().length > 0

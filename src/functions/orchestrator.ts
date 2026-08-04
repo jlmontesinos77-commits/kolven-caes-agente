@@ -33,22 +33,29 @@ const orchestrator: OrchestrationHandler = function* (ctx: OrchestrationContext)
   const total = prep.documentos.length;
   ctx.df.setCustomStatus({ fase: "clasificando", pack: packId, total, generados: 0 });
 
-  // 3) Fan-out POR LOTES en DOS FASES (fase C):
-  //    Fase 1 = documentos "ancla" (apertura/adhesion/contrato) que definen las
-  //    empresas. Se completan antes de la fase 2, para que diplomas y docs sin
-  //    empresa se archiven bajo la empresa ya resuelta en una sola pasada.
-  //    Fase 2 = el resto.
+  // 3) Fan-out POR LOTES en TRES FASES (enfoque escalonado: organizar antes de mezclar).
+  //    Fase 1 EMPRESAS  = apertura/adhesion/PSS/REA -> crean/consolidan empresas.
+  //    Fase 2 CENSO      = ITA/relacion, TC2/RNT, contratos/altas, fichas de maquina ->
+  //                        materializan trabajadores y maquinas (de una ITA salen decenas
+  //                        de trabajadores de golpe).
+  //    Fase 3 ACREDITAC. = el resto -> ya casan por DNI/matricula contra el censo.
+  //    Barrera entre fases: la fase N no arranca hasta que la N-1 ha terminado, para
+  //    que cada capa tenga construida la de la que depende.
   const LOTE = 8;
   const docs: any[] = prep.documentos;
-  const numAnclas: number = prep.numAnclas ?? 0;
+  const numFase1: number = prep.numFase1 ?? 0;
+  const numFase2: number = prep.numFase2 ?? 0;
   const resultados: any[] = [];
 
-  // Rangos de fase: [inicio, fin). Fase 1 anclas, fase 2 resto.
-  const fases: Array<[number, number]> = [];
-  if (numAnclas > 0) fases.push([0, numAnclas]);
-  fases.push([numAnclas, docs.length]);
+  // Rangos [inicio, fin) de cada fase sobre la lista ya ordenada por fase.
+  const fases: Array<[number, number]> = [
+    [0, numFase1],
+    [numFase1, numFase1 + numFase2],
+    [numFase1 + numFase2, docs.length],
+  ];
 
-  for (const [desde, hasta] of fases) {
+  for (let f = 0; f < fases.length; f++) {
+    const [desde, hasta] = fases[f];
     for (let i = desde; i < hasta; i += LOTE) {
       const grupo = docs.slice(i, Math.min(i + LOTE, hasta));
       const tareas = grupo.map((doc: any) =>
@@ -60,12 +67,19 @@ const orchestrator: OrchestrationHandler = function* (ctx: OrchestrationContext)
       );
       const parcial: any[] = yield ctx.df.Task.all(tareas);
       for (const r of parcial) resultados.push(r);
-      ctx.df.setCustomStatus({ fase: "clasificando", pack: packId, total: docs.length, procesados: resultados.length });
+      ctx.df.setCustomStatus({ fase: `clasificando_f${f + 1}`, pack: packId, total: docs.length, procesados: resultados.length });
+    }
+    // Tras cerrar la fase 2 (censo completo), reconciliar: engancha por DNI/CIF los
+    // documentos de trabajador que llegaron antes de existir su trabajador. Así la
+    // fase 3 arranca con el censo ya reconciliado.
+    if (f === 1) {
+      ctx.df.setCustomStatus({ fase: "reconciliando_censo", pack: packId });
+      yield ctx.df.callActivity("reconciliarSinAsignar", { origen, instanciaId: prep.instanciaId });
     }
   }
 
-  // 3b) RECONCILIACIÓN: re-enganchar los "sin asignar" por el DNI/CIF ya leído,
-  //     ahora que todas las empresas/trabajadores del lote existen.
+  // 3b) RECONCILIACIÓN FINAL: re-enganchar los "sin asignar" restantes por el DNI/CIF
+  //     ya leído, ahora que todas las empresas/trabajadores del lote existen.
   ctx.df.setCustomStatus({ fase: "reconciliando", pack: packId });
   yield ctx.df.callActivity("reconciliarSinAsignar", { origen, instanciaId: prep.instanciaId });
 
